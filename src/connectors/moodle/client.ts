@@ -115,22 +115,25 @@ export class MoodleClient {
 
 function parseResult<S extends z.ZodType>(wsfunction: string, json: unknown, schema: S): z.infer<S> {
   if (json && typeof json === "object" && !Array.isArray(json) && "exception" in json) {
+    // The errorcode is a fixed Moodle identifier (e.g. "invalidparameter") and safe to surface.
+    // Moodle's free-text message and debuginfo are NOT forwarded: they can echo request parameters.
     const errorcode = String((json as Record<string, unknown>).errorcode ?? "unknown");
     if (DENIED_CODES.has(errorcode)) {
       throw new AppError(
         "upstream_denied",
-        "The LMS service account is not permitted to read this data. Check the web-service token and role (docs/MOODLE_SETUP.md).",
+        `The LMS service account is not permitted to read this data (${wsfunction}: ${errorcode}). ` +
+          "Check the web-service token, role capabilities and service functions (docs/MOODLE_SETUP.md).",
         { wsfunction, errorcode },
       );
     }
-    throw new AppError("upstream_error", "The LMS returned an error for this request.", {
+    throw new AppError("upstream_error", `The LMS returned an error (${wsfunction}: ${errorcode}).`, {
       wsfunction,
       errorcode,
     });
   }
   const parsed = schema.safeParse(json);
   if (!parsed.success) {
-    throw new AppError("upstream_schema", "The LMS returned data in an unexpected format.", {
+    throw new AppError("upstream_schema", `The LMS returned data in an unexpected format (${wsfunction}).`, {
       wsfunction,
       issues: parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".")}: ${i.message}`),
     });

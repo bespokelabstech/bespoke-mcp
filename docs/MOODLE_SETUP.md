@@ -26,19 +26,25 @@ team mailbox. No course enrolments.
 _Users → Permissions → Define roles → Add_: context type **System**, archetype none.
 Allow only:
 
-| Capability                                       | Why                                                                        |
-| ------------------------------------------------ | -------------------------------------------------------------------------- |
-| `webservice/rest:use`                            | Call the REST protocol                                                     |
-| `moodle/course:view`                             | Access courses without being enrolled                                      |
-| `moodle/course:viewparticipants`                 | `core_enrol_get_enrolled_users`, `core_enrol_get_users_courses`            |
-| `moodle/course:enrolreview`                      | `onlyactive` option                                                        |
-| `moodle/site:accessallgroups`                    | Courses in separate-groups mode                                            |
-| `moodle/user:viewdetails`                        | Profile fields of other users                                              |
-| `moodle/user:viewalldetails`                     | **[verify]** username / non-public profile fields                          |
-| `moodle/course:viewhiddenuserfields`             | Last-access when hidden by `hiddenuserfields`                              |
-| `report/progress:view`, `report/completion:view` | **[verify]** others' progress/completion in `core_enrol_get_users_courses` |
+| Capability                                       | Why                                                                             |
+| ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `webservice/rest:use`                            | Call the REST protocol                                                          |
+| `moodle/course:view`                             | Access courses without being enrolled                                           |
+| `moodle/course:viewparticipants`                 | `core_enrol_get_enrolled_users`, `core_enrol_get_users_courses`                 |
+| `moodle/course:enrolreview`                      | `onlyactive` option                                                             |
+| `moodle/site:accessallgroups`                    | Courses in separate-groups mode                                                 |
+| `moodle/user:viewdetails`                        | Profile fields of other users                                                   |
+| `moodle/user:viewalldetails`                     | **[verify]** username / non-public profile fields                               |
+| `moodle/course:viewhiddenuserfields`             | Last-access when hidden by `hiddenuserfields`                                   |
+| `moodle/category:viewhiddencategories`           | Category names when courses sit in hidden categories (staging: categories 3, 7) |
+| `report/progress:view`, `report/completion:view` | **[verify]** others' progress/completion in `core_enrol_get_users_courses`      |
 
 Assign the role to `svc_mcp_readonly` at system level (_Assign system roles_).
+
+Moodle's external-service page will still list "Missing capabilities" for this user. Leave
+`moodle/user:update` (a **write** permission) and `moodle/course:useremail` (emails)
+ungranted — the server never needs them. Grant `moodle/user:viewhiddendetails` only if
+every Dealer comes back as never accessed.
 
 ## 4. External service
 

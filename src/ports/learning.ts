@@ -21,7 +21,8 @@ export interface Course {
   fullName: string;
   categoryId: number;
   visible: boolean;
-  completionEnabled: boolean;
+  /** null = not disclosed to this account by the LMS (unknown — never treat as "off"). */
+  completionEnabled: boolean | null;
   startDate: number | null; // epoch seconds
   endDate: number | null;
 }

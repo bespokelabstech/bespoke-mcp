@@ -103,6 +103,15 @@ describe("POST /api/mcp", () => {
     );
   });
 
+  it("list_courses flags categories it cannot name instead of returning a bare null", async () => {
+    const { payload } = await callTool(POST, "list_courses", {});
+    const hidden = payload.data.courses.find((c: { id: number }) => c.id === 40);
+    expect(hidden.category).toEqual({ id: 9, name: null, path: null });
+    expect(hidden.completion_tracked).toBeNull();
+    expect(payload.warnings.join(" ")).toMatch(/id\(s\) 9 .*do not guess/);
+    expect(payload.warnings.join(" ")).toMatch(/null = unknown/);
+  });
+
   it("get_access_summary returns grouped, enveloped metrics", async () => {
     const { result, payload } = await callTool(POST, "get_access_summary", {
       group_by: ["region", "level"],

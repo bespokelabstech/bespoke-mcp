@@ -47,11 +47,25 @@ export function registerListCourses(server: McpServer, deps: ToolDeps): void {
           })
           .sort((a, b) => a.fullName.localeCompare(b.fullName));
         const page = filtered.slice(args.offset, args.offset + args.limit);
+        const warnings: string[] = [];
+        const unnamed = [...new Set(page.map((c) => c.categoryId).filter((id) => !cats.has(id)))];
+        if (unnamed.length) {
+          warnings.push(
+            `Category names for id(s) ${unnamed.join(", ")} are not visible to the LMS service account ` +
+              "(likely hidden categories). Refer to them by id only; do not guess their names.",
+          );
+        }
+        if (page.some((c) => c.completionEnabled === null)) {
+          warnings.push(
+            "Completion tracking is not disclosed for some courses: completion_tracked null = unknown.",
+          );
+        }
         return buildEnvelope({
           tenant: deps.tenant,
           environment: deps.env,
           source: port.source,
           nowSec: deps.nowSec(),
+          warnings,
           data: {
             total: filtered.length,
             next_offset: args.offset + page.length < filtered.length ? args.offset + page.length : null,

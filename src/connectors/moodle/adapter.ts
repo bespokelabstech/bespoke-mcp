@@ -50,7 +50,7 @@ export class MoodleLearningAdapter implements LearningDataPort {
       const rows = await this.client.call("core_course_get_categories", {}, categoriesSchema);
       return rows.map((r) => ({
         id: r.id,
-        name: r.name,
+        name: text(r.name),
         parentId: r.parent,
         pathIds: r.path.split("/").filter(Boolean).map(Number),
       }));
@@ -65,11 +65,13 @@ export class MoodleLearningAdapter implements LearningDataPort {
         .filter((c) => c.id !== 1) // site front page
         .map((c) => ({
           id: c.id,
-          shortName: c.shortname,
-          fullName: c.fullname,
+          shortName: text(c.shortname),
+          fullName: text(c.fullname),
           categoryId: c.categoryid,
           visible: c.visible === undefined || c.visible === null ? true : c.visible === 1,
-          completionEnabled: c.enablecompletion === 1,
+          // Only disclosed to accounts that can update the course: absent = unknown, not "off".
+          completionEnabled:
+            c.enablecompletion === undefined || c.enablecompletion === null ? null : c.enablecompletion === 1,
           startDate: positiveOrNull(c.startdate),
           endDate: positiveOrNull(c.enddate),
         }));
@@ -98,8 +100,8 @@ export class MoodleLearningAdapter implements LearningDataPort {
           out.push({
             userId: u.id,
             username: u.username ?? "",
-            firstName: u.firstname ?? "",
-            lastName: u.lastname ?? "",
+            firstName: text(u.firstname),
+            lastName: text(u.lastname),
             courseRoles: (u.roles ?? []).map((r) => r.shortname),
             profile: profileMap(u.customfields),
             lastCourseAccess: positiveOrNull(u.lastcourseaccess),
@@ -122,8 +124,8 @@ export class MoodleLearningAdapter implements LearningDataPort {
     return {
       userId: u.id,
       username: u.username ?? username,
-      firstName: u.firstname ?? "",
-      lastName: u.lastname ?? "",
+      firstName: text(u.firstname),
+      lastName: text(u.lastname),
       profile: profileMap(u.customfields),
       suspended: u.suspended === undefined || u.suspended === null ? null : Boolean(u.suspended),
     };
@@ -137,7 +139,7 @@ export class MoodleLearningAdapter implements LearningDataPort {
     );
     return rows.map((c) => ({
       courseId: c.id,
-      fullName: c.fullname,
+      fullName: text(c.fullname),
       lastAccess: positiveOrNull(c.lastaccess),
       progressPct: c.progress === undefined || c.progress === null ? null : Math.round(c.progress * 10) / 10,
       completed: c.completed ?? null,
@@ -150,10 +152,26 @@ function profileMap(fields: RawCustomFields): Record<string, string> {
   const out: Record<string, string> = {};
   for (const f of fields ?? []) {
     if (f.value === undefined || f.value === null) continue;
-    out[f.shortname] = String(f.value).trim();
+    out[f.shortname] = text(String(f.value));
   }
   return out;
 }
+
+/**
+ * Moodle web services return display strings through format_string(): HTML-escaped
+ * ("Coffee &amp; Capsules") and sometimes padded. Return plain, single-spaced, trimmed text.
+ */
+export function text(value: string | null | undefined): string {
+  if (!value) return "";
+  return value
+    .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (m, n: string) => ENTITIES[n] ?? m)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
 
 function positiveOrNull(v: number | null | undefined): number | null {
   return v && v > 0 ? v : null;

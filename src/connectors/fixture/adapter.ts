@@ -117,6 +117,16 @@ export class FixtureLearningAdapter implements LearningDataPort {
       endDate: null,
     },
     {
+      id: 40,
+      shortName: "PRD-HIDDEN-CAT",
+      fullName: "Coffee & Capsules",
+      categoryId: 9, // not in `categories`: models a hidden category
+      visible: true,
+      completionEnabled: null,
+      startDate: null,
+      endDate: null,
+    },
+    {
       id: 31,
       shortName: "HID",
       fullName: "Hidden Draft",
@@ -258,7 +268,7 @@ export class FixtureLearningAdapter implements LearningDataPort {
           lastAccess: this.access.get(c.id)?.get(userId) ?? null,
           progressPct: c.completionEnabled ? (pr?.progress ?? null) : null,
           completed: c.completionEnabled ? (pr?.completed ?? null) : null,
-          completionEnabled: c.completionEnabled,
+          completionEnabled: c.completionEnabled === true,
         };
       });
   }
