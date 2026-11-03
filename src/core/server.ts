@@ -7,7 +7,7 @@ import type { ToolDeps } from "@/tools/runtime";
 import type { TenantConfig } from "@/tenants/schema";
 import type { RuntimeConfig } from "./env";
 
-export const SERVER_INFO = { name: "bespoke-mcp", version: "0.1.0" };
+export const SERVER_INFO = { name: "bespoke-mcp", version: "0.1.1" };
 
 /** Build the learning port selected by the runtime config. One instance per server instance. */
 export function buildLearningPort(cfg: RuntimeConfig): LearningDataPort | null {
@@ -33,6 +33,7 @@ export function buildInstructions(t: TenantConfig, env: string): string {
     `Every metric is computed by the server from live LMS records; report numbers exactly as returned and never estimate or recompute them.`,
     `"Accessed" means the LMS has a recorded last access to the ${v.course.toLowerCase()}. Windows ending now are exact; windows ending in the past only count people whose LAST access fell inside — always say so when you report them.`,
     `Profile values (${t.dimensions.region.label}, ${t.dimensions.level.label}, ${t.dimensions.branch.label}) are shown exactly as stored; "${t.emptyValueLabel}" means empty. Call get_dimensions before filtering if unsure of a value.`,
+    `Never guess or fill in values the server did not return (e.g. a null name); say they are unavailable.`,
     `Mention any warnings returned with a result.`,
   ].join(" ");
 }

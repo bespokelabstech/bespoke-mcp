@@ -123,3 +123,40 @@ describe("MoodleLearningAdapter", () => {
     expect(f.calls).toHaveLength(2);
   });
 });
+
+describe("Moodle text normalisation", () => {
+  it("decodes format_string() entities and trims", async () => {
+    const { text } = await import("@/connectors/moodle/adapter");
+    expect(text(" Revitalife Maqui Berry &amp; Mangosteen ")).toBe("Revitalife Maqui Berry & Mangosteen");
+    expect(text("O&#039;Neil &quot;GLB&quot; &#x26; co")).toBe(`O'Neil "GLB" & co`);
+    expect(text("a\n  b")).toBe("a b");
+    expect(text(null)).toBe("");
+  });
+
+  it("surfaces the Moodle errorcode and function, never Moodle's message", async () => {
+    const f = fakeFetch([
+      {
+        body: { exception: "x", errorcode: "invalidparameter", message: `leak ${SECRET}`, debuginfo: SECRET },
+      },
+    ]);
+    const err = await client(f.impl)
+      .call("core_enrol_get_enrolled_users", {}, enrolledUsersSchema)
+      .catch((e) => e);
+    expect(err.message).toBe("The LMS returned an error (core_enrol_get_enrolled_users: invalidparameter).");
+    expect(err.message).not.toContain(SECRET);
+  });
+
+  it("treats an undisclosed enablecompletion as unknown", async () => {
+    const f = fakeFetch([
+      { body: { courses: [{ id: 5, fullname: "A &amp; B", shortname: "AB", categoryid: 3, visible: 1 }] } },
+    ]);
+    const adapter = new MoodleLearningAdapter({
+      settings: { baseUrl: "https://lms.example", token: SECRET, timeoutMs: 2000 },
+      pageSize: 100,
+      cacheTtlSeconds: 0,
+      fetchImpl: f.impl,
+    });
+    const [course] = await adapter.listCourses();
+    expect(course).toMatchObject({ fullName: "A & B", completionEnabled: null });
+  });
+});

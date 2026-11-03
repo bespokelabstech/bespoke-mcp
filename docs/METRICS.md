@@ -88,6 +88,9 @@ page; dealer detail: always).
 | `avg_progress_pct`    | Mean Moodle course progress % over tracked enrolments with a progress value             |
 
 Courses without completion tracking never count as 0% — they are excluded from the basis.
+In `list_courses`, `completion_tracked: null` means Moodle did not disclose the setting to the
+service account (unknown, not "off"); per-Dealer data from `core_enrol_get_users_courses` is
+authoritative.
 **[verify]** the service role can read other users' progress (`report/progress:view`).
 
 ## Source map
