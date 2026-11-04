@@ -74,6 +74,21 @@ describe("MoodleClient", () => {
     expect(h.calls).toHaveLength(1);
   });
 
+  it("labels a timeout while reading the body as a timeout, not bad data", async () => {
+    const impl = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
+      },
+    })) as unknown as typeof fetch;
+    const err = await client(impl)
+      .call("f", {}, enrolledUsersSchema)
+      .catch((e) => e);
+    expect(err.code).toBe("upstream_unavailable");
+    expect(err.message).toMatch(/did not respond in time/);
+  });
+
   it("rejects unexpected shapes", async () => {
     const f = fakeFetch([{ body: { not: "an array" } }]);
     await expect(client(f.impl).call("f", {}, enrolledUsersSchema)).rejects.toMatchObject({
@@ -235,5 +250,23 @@ describe("course-context errors", () => {
       .call("f", {}, enrolledUsersSchema)
       .catch((e) => e);
     expect(err.message).toMatch(/User not fully set-up.*required profile fields/);
+  });
+});
+
+describe("cursor size", () => {
+  it("detects early when running state no longer fits a cursor", async () => {
+    const { cursorFits } = await import("@/core/cursor");
+    const small = {
+      v: 1 as const,
+      q: "q",
+      done: [1, 2],
+      state: { acc: Array.from({ length: 20 }, (_, i) => [[`Region ${i}`], 120, 80]) },
+    };
+    const big = {
+      ...small,
+      state: { acc: Array.from({ length: 700 }, (_, i) => [[`BRANCH NAME ${i} (0${i})`], 120, 80, 5]) },
+    };
+    expect(cursorFits(small)).toBe(true);
+    expect(cursorFits(big)).toBe(false);
   });
 });

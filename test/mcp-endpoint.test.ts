@@ -1,4 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FixtureLearningAdapter as Fixture } from "@/connectors/fixture/adapter";
+import type { TenantConfig } from "@/tenants/schema";
 import { KEY, rpcBody } from "./helpers";
 
 const ENV = { MCP_TENANT: "gla", MCP_ENV: "staging", MCP_ACCESS_KEY: KEY, MCP_DATA_SOURCE: "fixture" };
@@ -198,57 +200,156 @@ describe("POST /api/mcp", () => {
 });
 
 describe("answers in parts (stateless cursor)", () => {
-  it("continues across calls and the final part matches a single-pass answer", async () => {
+  type Limits = Partial<TenantConfig["limits"]>;
+  async function handlers(limits: Limits, slow: (a: Fixture) => void) {
     const { buildMcpHandler } = await import("@/core/server");
     const { loadTenant } = await import("@/tenants/registry");
     const { FixtureLearningAdapter } = await import("@/connectors/fixture/adapter");
     const tenant = loadTenant("gla", "staging");
-    const slow = new FixtureLearningAdapter({ nowSec: Math.floor(Date.now() / 1000) });
-    const orig = slow.listCourseEnrolments.bind(slow);
-    slow.listCourseEnrolments = async (id: number) => {
-      await new Promise((r) => setTimeout(r, 1600));
-      return orig(id);
-    };
-    const cfg = {
-      tenant: { ...tenant, limits: { ...tenant.limits, requestBudgetMs: 5_000 } },
+    const now = Math.floor(Date.now() / 1000);
+    const cfg = (l: Limits) => ({
+      tenant: { ...tenant, limits: { ...tenant.limits, ...l } },
       env: "staging" as const,
       accessKeys: [KEY],
       dataSource: { kind: "none" as const },
-    };
-    const handler = buildMcpHandler(cfg, slow);
-    const call = async (args: Record<string, unknown>) => {
-      const body = await rpcBody(
-        await handler(rpc("tools/call", { name: "query_metrics", arguments: args })),
-      );
+    });
+    const slowPort = new FixtureLearningAdapter({ nowSec: now });
+    slow(slowPort);
+    const caller = (h: (r: Request) => Promise<Response>) => async (args: Record<string, unknown>) => {
+      const body = await rpcBody(await h(rpc("tools/call", { name: "query_metrics", arguments: args })));
       return JSON.parse((body.result as { content: Array<{ text: string }> }).content[0]!.text);
     };
-    const args = { group_by: ["region"], count_by: "enrolments", signals: ["site_last_access"] };
-    const first = await call(args);
-    expect(first.data.complete).toBe(false);
-    expect(first.data.next_cursor).toBeTruthy();
-    expect(first.data.rows).toEqual([]); // region rows need every course; none are shown early
-    let page = first;
-    let guard = 0;
-    while (!page.data.complete && guard++ < 5) page = await call({ ...args, cursor: page.data.next_cursor });
-    expect(page.data.complete).toBe(true);
-    expect(page.data.progress.courses_done).toBe(page.data.progress.courses_total);
+    return {
+      slowPort,
+      slowCall: caller(buildMcpHandler(cfg(limits), slowPort)),
+      fastCall: caller(
+        buildMcpHandler(
+          cfg({ ...limits, requestBudgetMs: 50_000, maxPeopleForPersonSignals: 10_000 }),
+          new FixtureLearningAdapter({ nowSec: now }),
+        ),
+      ),
+    };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON tool payloads
+  type Part = { data: any; warnings: string[]; error?: { code: string } };
+  const last = (p: Part[]): Part => p[p.length - 1]!;
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  async function untilComplete(
+    call: (a: Record<string, unknown>) => Promise<Part>,
+    args: Record<string, unknown>,
+  ) {
+    const parts = [await call(args)];
+    while (!last(parts).data.complete && parts.length < 12) {
+      parts.push(await call({ ...args, cursor: last(parts).data.next_cursor }));
+    }
+    return parts;
+  }
 
-    // Same question answered by a fast source in one pass gives identical numbers.
-    const fast = buildMcpHandler(
-      { ...cfg, tenant },
-      new FixtureLearningAdapter({ nowSec: Math.floor(Date.now() / 1000) }),
+  it("splits large courses by page; per-course rows and totals equal a single pass", async () => {
+    const { slowCall, fastCall } = await handlers(
+      { requestBudgetMs: 5_000, participantsPageSize: 50 },
+      (p) => {
+        const orig = p.listCourseEnrolmentsPage.bind(p);
+        p.listCourseEnrolmentsPage = async (...a) => (await delay(450), orig(...a));
+      },
     );
-    const body = await rpcBody(await fast(rpc("tools/call", { name: "query_metrics", arguments: args })));
-    const single = JSON.parse((body.result as { content: Array<{ text: string }> }).content[0]!.text);
-    expect(single.data.complete).toBe(true);
-    expect(page.data.totals).toEqual(single.data.totals);
-    expect(page.data.rows).toEqual(single.data.rows);
-    expect(page.data.population).toEqual(single.data.population);
+    const args = { group_by: ["course"], signals: ["site_last_access"], recent_days: 30 };
+    const parts = await untilComplete(slowCall, args);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.slice(0, -1).some((p) => p.data.progress.course_in_progress)).toBe(true); // split mid-course
+    const single = await fastCall(args);
+    const rows = parts.flatMap((p) => p.data.rows).sort((a, b) => a.group.course.id - b.group.course.id);
+    expect(rows).toEqual([...single.data.rows].sort((a, b) => a.group.course.id - b.group.course.id));
+    expect(last(parts).data.totals).toEqual(single.data.totals);
+    expect(last(parts).data.population).toEqual(single.data.population);
+    const bad = await slowCall({ ...args, group_by: ["level"], cursor: parts[0]!.data.next_cursor });
+    expect(bad.error!.code).toBe("invalid_input");
+  }, 60_000);
 
-    // A tampered or mismatched cursor is rejected.
-    const bad = await call({ ...args, group_by: ["level"], cursor: first.data.next_cursor });
-    expect(bad.error.code).toBe("invalid_input");
-  }, 30_000);
+  it("non-course groupings arrive complete with the last part", async () => {
+    const { slowCall, fastCall } = await handlers(
+      { requestBudgetMs: 5_000, participantsPageSize: 50 },
+      (p) => {
+        const orig = p.listCourseEnrolmentsPage.bind(p);
+        p.listCourseEnrolmentsPage = async (...a) => (await delay(450), orig(...a));
+      },
+    );
+    const args = { group_by: ["region"], count_by: "enrolments", signals: ["site_last_access"] };
+    const parts = await untilComplete(slowCall, args);
+    expect(parts.length).toBeGreaterThan(1);
+    // look-alike notes cover regions seen in every part, not only the last one
+    expect(last(parts).warnings.join(" ")).toMatch(/"Visayas", "Visayas 1", "Visayas 2" are separate values/);
+    expect(parts.slice(0, -1).every((p) => p.data.rows.length === 0)).toBe(true);
+    const single = await fastCall(args);
+    expect(last(parts).data.rows).toEqual(single.data.rows);
+    expect(last(parts).data.totals).toEqual(single.data.totals);
+  }, 60_000);
+
+  it("answers 'started' for more people than fit one call, in people batches", async () => {
+    const { slowCall, fastCall } = await handlers(
+      { requestBudgetMs: 5_000 }, // default 300-person threshold: batching must still kick in
+      (p) => {
+        const orig = p.listPersonCourses.bind(p);
+        p.listPersonCourses = async (id) => (await delay(120), orig(id));
+      },
+    );
+    const args = { course_ids: [10], group_by: ["region"], signals: ["started", "completion"] };
+    const parts = await untilComplete(slowCall, args);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts[0]!.data.progress.people_total).toBeLessThan(300);
+    expect(last(parts).data.skipped_signals).toBeUndefined();
+    const single = await fastCall(args);
+    expect(single.data.complete).toBe(true);
+    expect(last(parts).data.totals).toEqual(single.data.totals);
+    expect(last(parts).data.rows).toEqual(single.data.rows);
+    expect(last(parts).data.population).toEqual(single.data.population);
+    expect(last(parts).data.totals.started.unknown).toBe(0);
+  }, 60_000);
+
+  it("resumes people batches by key, so removing an already-counted person skips nobody", async () => {
+    const { slowPort, slowCall, fastCall } = await handlers({ requestBudgetMs: 5_000 }, (p) => {
+      const orig = p.listPersonCourses.bind(p);
+      p.listPersonCourses = async (id) => (await delay(120), orig(id));
+    });
+    const args = { course_ids: [10], signals: ["started"] };
+    const single = await fastCall(args);
+    const first = await slowCall(args);
+    expect(first.data.complete).toBe(false);
+    // Remove the dealer with the smallest counting key (processed in part 1) from the course.
+    const { classify } = await import("@/domain/people");
+    const { loadTenant } = await import("@/tenants/registry");
+    const tenant = loadTenant("gla", "staging");
+    const enrolled = slowPort.people.filter((x) => slowPort.access.get(10)?.has(x.userId));
+    const dealers = enrolled
+      .map((x) => ({ x, v: classify({ ...x, courseRoles: [x.role] }, tenant) }))
+      .filter((d) => d.v.status === "person")
+      .sort((a, b) => (a.v.key < b.v.key ? -1 : 1));
+    slowPort.access.get(10)!.delete(dealers[0]!.x.userId);
+    const parts = [first];
+    while (!last(parts).data.complete && parts.length < 12) {
+      parts.push(await slowCall({ ...args, cursor: last(parts).data.next_cursor }));
+    }
+    // Index-based resumption would skip one unprocessed dealer here.
+    expect(last(parts).data.totals.enrolled).toBe(single.data.totals.enrolled);
+  }, 60_000);
+
+  it("avg_score works in parts, and is skipped (explicitly) alongside per-person signals", async () => {
+    const { slowCall, fastCall } = await handlers(
+      { requestBudgetMs: 5_000, participantsPageSize: 50 },
+      (p) => {
+        const orig = p.listCourseEnrolmentsPage.bind(p);
+        p.listCourseEnrolmentsPage = async (...a) => (await delay(450), orig(...a));
+      },
+    );
+    const args = { group_by: ["course"], signals: ["avg_score"] };
+    const parts = await untilComplete(slowCall, args);
+    const single = await fastCall(args);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(last(parts).data.totals).toEqual(single.data.totals);
+    expect(single.data.totals.avg_score.graded_items).toBeGreaterThan(0);
+    const mixed = await fastCall({ course_ids: [10], signals: ["started", "avg_score"] });
+    expect(mixed.data.skipped_signals.map((x: { signal: string }) => x.signal)).toEqual(["avg_score"]);
+  }, 60_000);
 });
 
 describe("misconfiguration", () => {

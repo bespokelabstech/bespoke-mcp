@@ -107,7 +107,15 @@ export class MoodleClient {
     }
     try {
       return await res.json();
-    } catch {
+    } catch (err) {
+      // The timeout also covers reading the body: an abort mid-download is a timeout, not bad data.
+      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+        throw new AppError("upstream_unavailable", "The LMS did not respond in time. Try again shortly.", {
+          wsfunction,
+          cause: err.name,
+          phase: "body",
+        });
+      }
       throw new AppError("upstream_schema", "The LMS returned an unreadable response.", { wsfunction });
     }
   }

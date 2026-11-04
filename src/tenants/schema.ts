@@ -101,7 +101,7 @@ export const tenantConfigSchema = z.object({
     maxCoursesPerRequest: z.number().int().positive(),
     /** Page size for paged participant pulls. */
     participantsPageSize: z.number().int().min(50).max(2000),
-    /** Max people for which per-person signals (started, completion) are fetched in one request. */
+    /** list_people: max people for filtering by a per-person signal (query_metrics batches instead). */
     maxPeopleForPersonSignals: z.number().int().positive(),
     /** Max concurrent upstream calls per request. */
     upstreamConcurrency: z.number().int().min(1).max(16),

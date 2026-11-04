@@ -90,11 +90,15 @@ A future port registers its tools only for tenants that bind it.
   0 = off) avoids re-pulling within one conversation.
 - Bounded concurrency (`limits.upstreamConcurrency`, 2) and a per-tool time budget
   (`limits.requestBudgetMs` < Vercel `maxDuration` 60 s).
-- **Answers in parts.** Enrolment-level `query_metrics` processes courses in chunks while
-  budget remains and returns `next_cursor` — base64url JSON (done course ids + running
-  partial sums) HMAC-signed with a key derived from the access key and bound to a hash of the
-  query. Per-course rows are final per part; other groupings and totals arrive with the last
-  part. People-level questions must fit one call (distinct people are not additive).
+- **Answers in parts.** `query_metrics` picks single / pages / people mode. Pages: the work
+  unit is one enrolment page of one course (so a 6K-enrolment course splits mid-course);
+  people: per-person signals always run in batches of people (one call when small), ordered
+  by counting key so duplicate accounts stay together and resumed by the last processed key
+  (stable if enrolments change between parts). The cursor is base64url
+  JSON (position + additive partial sums packed as positional arrays; size checked before each
+  further unit of work), HMAC-signed with a key derived from the access key
+  and bound to a hash of the query. A timeout while reading a Moodle body is reported as a
+  timeout, and a part that runs out of time returns what it finished plus the cursor.
 - Moodle's fixed reason for course-access failures ("User not fully set-up", "Site policy not
   agreed") is surfaced with a hint; free-text messages are otherwise never forwarded.
 
@@ -127,8 +131,9 @@ upstream call counts — never argument values or results.
 - **App activity is invisible per course** except through progress/completion. Opening a
   course or partly viewing an activity in the app leaves no trace the API exposes.
 - **History:** only the last access is kept; past windows are labelled `last_access_in_range`.
-- **Per-person signals** (`started`, `completion`) need one call per person: capped at
-  `maxPeopleForPersonSignals` (300) per answer.
+- **Per-person signals** (`started`, `completion`) need one call per person and run in
+  batches (≈ 0.5–1 s per person on staging at concurrency 2), so large scopes take several parts.
+  `list_people` filtered by `started` is still limited to 300 people.
 - **Org-wide distinct-people answers** across many courses may not fit one call.
 - A read-only Moodle plugin (aggregates, activity log, history) lifts all four — ROADMAP.
 - System-level roles are not visible through course data; staff are excluded by Dealer Level.

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0 — 2026-11-04
+
+After the first live checks on staging (definitions `2026-11-mvp3`):
+
+- **Answers in parts, mid-course:** enrolment-level questions page through each course, so
+  the largest course (≈6.4K enrolments, 47 s alone) no longer sinks an all-courses question.
+- **`started` / `completion` for any scope size:** always computed in batches of people
+  (one call when small, parts when large), resumed by last processed person.
+- Compact cursor (positional arrays) with an early size check; region look-alike notes carried
+  across parts; grade report fetched once per course per part; enrolment pages cached once.
+- `avg_score` with `started`/`completion` in the same query is skipped with a reason.
+- A timeout while reading a Moodle response is reported as a timeout (was "unreadable
+  response"), and a part that runs out of time returns what it finished plus the cursor.
+- Dummy rule: one digit repeated at any length (`0`, `000`, `00000`) — was 12 digits only.
+- `skipped_signals` field when a requested signal cannot be computed.
+- Enrolment unit now counts account × course as Moodle records it (duplicate accounts merge
+  only in the people unit), so parts are exactly additive.
+
 ## 0.2.0 — 2026-11-04
 
 Redesign after the staging investigation (definitions `2026-11-mvp2`, see METRICS):
