@@ -47,7 +47,7 @@ label and exposes parsed name and code. No catalog-derived region.
 **Why.** The profile is the business source of truth; legacy values are refreshed
 programmatically on sign-in, so stale values mostly mark inactive accounts.
 
-## ADR-005 — Dealer rule = student + Conso ID − exclusions
+## ADR-005 — Dealer rule = student + Conso ID − exclusions (superseded by ADR-008)
 
 **Decision.** A Dealer is an actively enrolled `student` with a Conso ID (`dealer_conso_id`
 or Conso-shaped username), not holding `redemptionmanager`, not in the excluded username
@@ -63,3 +63,48 @@ admins have no Conso ID.
 
 **Why.** The API exposes only the most recent access; silently treating it as history would
 undercount active periods.
+
+## ADR-007 — Named engagement signals; "started" is the default course signal (2026-11-04)
+
+**Decision.** Replace the single "accessed" metric with named signals: `started`,
+`completion`, `site_last_access`, `web_course_access`, `avg_score`. `started` (progress > 0
+or completed) is the default per-course signal; `web_course_access` is always labelled
+web-only.
+
+**Why.** Verified on staging: opening a course in the mobile app leaves Moodle's per-course
+last access empty (a Dealer with 2 completed courses had none recorded on any of 27), while
+completing an activity in the app moves progress. Course access as "last access" reported
+≈ 0.5% for a production copy — a measurement artefact, not engagement.
+
+**Cost.** `started`/`completion` need one call per person (capped at 300 per answer);
+opening without completing is invisible without the activity log.
+
+## ADR-008 — Three identity statuses: dealer / legacy / excluded (2026-11-04)
+
+**Decision.** Every account gets one status. Dealer = 12-char Conso ID after normalisation
+(trim, lower-case, 11→12 digits); legacy = missing or old/malformed ID; excluded = role,
+test, staff (`PC Center of Excellence`), dummy patterns. Dealers count once per Conso ID.
+Callers choose the population; counts per status come with every answer.
+
+**Why.** Sampled on staging: canonical `BBBB+8 digits` and PC alphanumeric IDs are genuine;
+staff are identified by Dealer Level, not ID shape; duplicate accounts exist (same ID with a
+dropped zero); placeholder IDs (`0`, `111111111111`, `123123123123`) were counted as Dealers
+under ADR-005, and thousands of legacy accounts were silently dropped.
+
+## ADR-009 — Nothing stored; large answers in parts via a signed cursor (2026-11-04)
+
+**Decision.** No datastore. Enrolment-level questions that do not fit one call are answered
+in parts: the response carries a signed cursor with progress and running totals; Claude calls
+again until complete.
+
+**Why.** Business preference for fresh data and no copies of personal data outside Moodle.
+A nightly precomputed store was considered and rejected; Moodle-side aggregation (read-only
+plugin) is the route for org-wide speed and history.
+
+## ADR-010 — General-purpose tools, not dashboard-shaped endpoints (2026-11-04)
+
+**Decision.** Six capabilities (describe, catalogue, dimension values, metrics query, people
+list, person detail) combined by Claude, instead of one tool per dashboard card/menu.
+
+**Why.** The COE dashboard asks are the test of coverage, not the design. A metric/dimension
+layer serves other clients and questions without new tools.

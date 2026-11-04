@@ -1,17 +1,16 @@
+import type { AccountInput } from "@/domain/people";
 import { loadTenant } from "@/tenants/registry";
-import type { Participant } from "@/ports/learning";
 
 export const KEY = "test-key-".padEnd(40, "x");
 export const glaStaging = () => loadTenant("gla", "staging");
 
-export function participant(over: Partial<Participant> & { userId: number }): Participant {
+export function account(over: Partial<AccountInput> & { userId: number }): AccountInput {
   return {
-    username: `pc${String(over.userId).padStart(10, "0")}`,
+    username: `0101${String(over.userId).padStart(8, "0")}`,
     firstName: "Test",
     lastName: String(over.userId),
-    courseRoles: ["student"],
     profile: {},
-    lastCourseAccess: null,
+    courseRoles: ["student"],
     ...over,
   };
 }

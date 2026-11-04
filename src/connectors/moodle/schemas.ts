@@ -9,6 +9,10 @@ import { z } from "zod";
 const num = z.coerce.number();
 const optNum = z.coerce.number().nullish();
 
+export const siteInfoSchema = z.object({
+  functions: z.array(z.object({ name: z.string() })).nullish(),
+});
+
 export const categoriesSchema = z.array(
   z.object({
     id: num,
@@ -43,6 +47,7 @@ export const enrolledUsersSchema = z.array(
     lastname: z.string().nullish(),
     roles: z.array(z.object({ shortname: z.string() })).nullish(),
     customfields: customFields,
+    lastaccess: optNum,
     lastcourseaccess: optNum,
   }),
 );
@@ -54,6 +59,7 @@ export const usersByFieldSchema = z.array(
     firstname: z.string().nullish(),
     lastname: z.string().nullish(),
     suspended: z.union([z.boolean(), num]).nullish(),
+    lastaccess: optNum,
     customfields: customFields,
   }),
 );
@@ -68,5 +74,21 @@ export const usersCoursesSchema = z.array(
     completed: z.boolean().nullish(),
   }),
 );
+
+export const gradeItemsSchema = z.object({
+  usergrades: z.array(
+    z.object({
+      userid: num,
+      gradeitems: z.array(
+        z.object({
+          itemtype: z.string().nullish(),
+          itemmodule: z.string().nullish(),
+          graderaw: optNum,
+          grademax: optNum,
+        }),
+      ),
+    }),
+  ),
+});
 
 export type RawCustomFields = z.infer<typeof customFields>;

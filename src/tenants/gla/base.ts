@@ -27,16 +27,29 @@ export const glaBase: TenantConfigInput = {
   identity: {
     label: "Conso ID",
     profileField: "dealer_conso_id",
-    // bihasa-moodle-go handlers/auth.go: Conso ID == lower-cased Moodle username
-    usernamePattern: "^[a-z0-9]{12}$",
+    // bihasa-moodle-go handlers/auth.go: Conso ID == lower-cased Moodle username, 12 chars.
+    // Sampled on staging: BBBB + 8 digits (BBBB = branch code) and PC alphanumeric variants.
+    validPattern: "^[a-z0-9]{12}$",
+    // Sampled: 11-digit IDs are the same Dealer with the leading zero dropped.
+    padNumericFrom: 11,
+    padNumericTo: 12,
   },
   eligibility: {
     requiredCourseRoles: ["student"],
-    requireIdentity: true,
+    legacyLabel: "Legacy",
     exclude: {
       usernames: [],
       usernameRanges: [],
       courseRoles: ["redemptionmanager"],
+      // Sampled: every staff row (4-digit employee numbers, "pc…" ids) carries this level.
+      staffLevels: ["PC Center of Excellence"],
+      dummyIdentifierPatterns: [
+        "^(\\d)\\1{11}$", // one digit repeated: 111111111111, 000000000000
+        // short block repeated to fill the id: 123123123123, 121212121212. Blocks of 4+ are NOT
+        // matched: canonical ids are branch(4) + sequence, e.g. 0001 0001 0001 could be real.
+        "^(\\d{2,3})\\1+$",
+        "^1{10}\\d{2}$", // 1111111111xx test series, e.g. 111111111112
+      ],
     },
   },
   courses: {
@@ -46,10 +59,10 @@ export const glaBase: TenantConfigInput = {
   limits: {
     maxCoursesPerRequest: 40,
     participantsPageSize: 500,
-    maxPeopleForCompletion: 300,
-    upstreamConcurrency: 4,
+    maxPeopleForPersonSignals: 300,
+    upstreamConcurrency: 2,
     requestBudgetMs: 50_000,
-    cacheTtlSeconds: 900,
+    cacheTtlSeconds: 300,
   },
   environments: {
     staging: { moodleAllowedHosts: ["gla-staging.bihasa.ph"], vercelPreviewBranches: ["release"] },

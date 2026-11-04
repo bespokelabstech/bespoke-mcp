@@ -36,6 +36,7 @@ Repeat for production with `https://gla.mcp.bespokelabs.tech/api/mcp` and the pr
 
 ## Demo prompts
 
-1. "Which Region has the lowest share of enrolled Dealers who opened any Course in the last 30 days?"
-2. "Show Dealer access per Dealer Level for the onboarding Courses, and which Course has the most Dealers who never opened it."
-3. "In Metro Manila, which Branches have the most Great Life Builders with no Course access in the last 30 days? List them for the top Branch."
+1. "For Revitalife Maqui Berry, how many Dealers have started it, by Region? Which Regions look alike and are separate values?"
+2. "List the Great Life Builders in Visayas 3 who have not started Revitalife Maqui Berry."
+3. "Per Course, how many Dealers used the app in the last 30 days, and what's the average quiz score?" (answered in parts)
+4. "How many enrolled accounts are Legacy or Excluded in Kwentong Great Life, and why?"

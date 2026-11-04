@@ -91,7 +91,7 @@ H=(-H 'content-type: application/json' -H 'accept: application/json, text/event-
 curl -s -o /dev/null -w '%{http_code}\n' "${H[@]}" -X POST $URL/api/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'     # 401
 curl -s "${H[@]}" -H "x-api-key: $KEY" -X POST $URL/api/mcp \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'     # 5 tools
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'     # 6 tools
 curl -s "${H[@]}" -H "x-api-key: $KEY" -X POST $URL/api/mcp \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_courses","arguments":{}}}'
 ```

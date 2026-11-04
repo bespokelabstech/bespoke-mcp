@@ -12,6 +12,8 @@ export interface ToolDeps {
   /** null when this deployment has no LMS credentials yet. */
   learning: LearningDataPort | null;
   nowSec: () => number;
+  /** Signs continuation cursors (derived from the access key; never sent anywhere). */
+  cursorSecret: string;
 }
 
 export const READ_ONLY_ANNOTATIONS = {
@@ -31,9 +33,15 @@ export function requireLearning(deps: ToolDeps): LearningDataPort {
   return deps.learning;
 }
 
+/** Remaining time in this tool call's budget, in ms. */
+export function remainingBudgetMs(): number {
+  const ctx = requestContext.get();
+  return ctx ? ctx.deadline - Date.now() : Number.POSITIVE_INFINITY;
+}
+
 /**
- * Wrap a tool body: per-call time budget, structured logging, and conversion of any
- * failure into a safe `isError` result (never a stack trace or upstream payload).
+ * Wrap a tool body: per-call time budget, structured logging, diagnostics on the result, and
+ * conversion of any failure into a safe `isError` result (never a stack trace or upstream payload).
  */
 export async function runTool(
   name: string,
@@ -45,8 +53,13 @@ export async function runTool(
   const state = newRequestState(deps.tenant.limits.requestBudgetMs, parent?.requestId);
   return requestContext.run(state, async () => {
     const started = Date.now();
+    const diagnostics = () => ({ ms: Date.now() - started, lms_calls: state.upstreamCalls });
     try {
       const result = await body();
+      const out =
+        result && typeof result === "object" && !Array.isArray(result)
+          ? { ...(result as Record<string, unknown>), diagnostics: diagnostics() }
+          : result;
       log.info("tool.ok", {
         tool: name,
         arg_keys: Object.keys(args).filter((k) => args[k] !== undefined),
@@ -55,8 +68,8 @@ export async function runTool(
         upstream_ms: state.upstreamMs,
       });
       return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-        structuredContent: result as Record<string, unknown>,
+        content: [{ type: "text", text: JSON.stringify(out) }],
+        structuredContent: out as Record<string, unknown>,
       };
     } catch (err) {
       const e = toAppError(err);
@@ -69,7 +82,12 @@ export async function runTool(
       });
       return {
         isError: true,
-        content: [{ type: "text", text: JSON.stringify({ error: { code: e.code, message: e.message } }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ error: { code: e.code, message: e.message }, diagnostics: diagnostics() }),
+          },
+        ],
       };
     }
   });

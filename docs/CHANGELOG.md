@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.0 — 2026-11-04
+
+Redesign after the staging investigation (definitions `2026-11-mvp2`, see METRICS):
+
+- **Tools:** `describe_capabilities`, `list_courses`, `list_dimension_values`, `query_metrics`,
+  `list_people`, `get_person` replace the 0.1 tools.
+- **Signals:** `started` (default), `completion`, `site_last_access`, `web_course_access`
+  (labelled web-only — the app does not update it), `avg_score` (grade report, detected).
+- **Population:** dealer / legacy / excluded statuses with reasons; Conso ID normalisation
+  (11→12 digits) and one count per Conso ID; dummy patterns and staff Dealer Level.
+- **Speed:** enrolments pulled without custom fields; profiles once per account, batched;
+  concurrency 2; 5-minute in-memory cache.
+- **Answers in parts** for enrolment-level queries via a signed, stateless cursor.
+- Region/branch values verbatim with "separate values" notes for look-alikes.
+- Category filter works for categories hidden from the service account.
+- Moodle's reason for course-access failures is shown with a hint.
+- Every result carries `diagnostics` (`ms`, `lms_calls`).
+- Moodle setup: grade report (optional), service-account prerequisites (required profile
+  fields, site policy acceptance).
+
 ## 0.1.1 — 2026-11-03
 
 First staging run fixes:
