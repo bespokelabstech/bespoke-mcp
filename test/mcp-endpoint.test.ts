@@ -220,6 +220,7 @@ describe("answers in parts (stateless cursor)", () => {
       return JSON.parse((body.result as { content: Array<{ text: string }> }).content[0]!.text);
     };
     return {
+      slowPort,
       slowCall: caller(buildMcpHandler(cfg(limits), slowPort)),
       fastCall: caller(
         buildMcpHandler(
@@ -230,7 +231,7 @@ describe("answers in parts (stateless cursor)", () => {
     };
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON tool payloads
-  type Part = { data: any; error?: { code: string } };
+  type Part = { data: any; warnings: string[]; error?: { code: string } };
   const last = (p: Part[]): Part => p[p.length - 1]!;
   const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
   async function untilComplete(
@@ -276,6 +277,8 @@ describe("answers in parts (stateless cursor)", () => {
     const args = { group_by: ["region"], count_by: "enrolments", signals: ["site_last_access"] };
     const parts = await untilComplete(slowCall, args);
     expect(parts.length).toBeGreaterThan(1);
+    // look-alike notes cover regions seen in every part, not only the last one
+    expect(last(parts).warnings.join(" ")).toMatch(/"Visayas", "Visayas 1", "Visayas 2" are separate values/);
     expect(parts.slice(0, -1).every((p) => p.data.rows.length === 0)).toBe(true);
     const single = await fastCall(args);
     expect(last(parts).data.rows).toEqual(single.data.rows);
@@ -284,7 +287,7 @@ describe("answers in parts (stateless cursor)", () => {
 
   it("answers 'started' for more people than fit one call, in people batches", async () => {
     const { slowCall, fastCall } = await handlers(
-      { requestBudgetMs: 5_000, maxPeopleForPersonSignals: 10 },
+      { requestBudgetMs: 5_000 }, // default 300-person threshold: batching must still kick in
       (p) => {
         const orig = p.listPersonCourses.bind(p);
         p.listPersonCourses = async (id) => (await delay(120), orig(id));
@@ -293,7 +296,7 @@ describe("answers in parts (stateless cursor)", () => {
     const args = { course_ids: [10], group_by: ["region"], signals: ["started", "completion"] };
     const parts = await untilComplete(slowCall, args);
     expect(parts.length).toBeGreaterThan(1);
-    expect(parts[0]!.data.progress.people_total).toBeGreaterThan(10);
+    expect(parts[0]!.data.progress.people_total).toBeLessThan(300);
     expect(last(parts).data.skipped_signals).toBeUndefined();
     const single = await fastCall(args);
     expect(single.data.complete).toBe(true);
@@ -301,6 +304,51 @@ describe("answers in parts (stateless cursor)", () => {
     expect(last(parts).data.rows).toEqual(single.data.rows);
     expect(last(parts).data.population).toEqual(single.data.population);
     expect(last(parts).data.totals.started.unknown).toBe(0);
+  }, 60_000);
+
+  it("resumes people batches by key, so removing an already-counted person skips nobody", async () => {
+    const { slowPort, slowCall, fastCall } = await handlers({ requestBudgetMs: 5_000 }, (p) => {
+      const orig = p.listPersonCourses.bind(p);
+      p.listPersonCourses = async (id) => (await delay(120), orig(id));
+    });
+    const args = { course_ids: [10], signals: ["started"] };
+    const single = await fastCall(args);
+    const first = await slowCall(args);
+    expect(first.data.complete).toBe(false);
+    // Remove the dealer with the smallest counting key (processed in part 1) from the course.
+    const { classify } = await import("@/domain/people");
+    const { loadTenant } = await import("@/tenants/registry");
+    const tenant = loadTenant("gla", "staging");
+    const enrolled = slowPort.people.filter((x) => slowPort.access.get(10)?.has(x.userId));
+    const dealers = enrolled
+      .map((x) => ({ x, v: classify({ ...x, courseRoles: [x.role] }, tenant) }))
+      .filter((d) => d.v.status === "person")
+      .sort((a, b) => (a.v.key < b.v.key ? -1 : 1));
+    slowPort.access.get(10)!.delete(dealers[0]!.x.userId);
+    const parts = [first];
+    while (!last(parts).data.complete && parts.length < 12) {
+      parts.push(await slowCall({ ...args, cursor: last(parts).data.next_cursor }));
+    }
+    // Index-based resumption would skip one unprocessed dealer here.
+    expect(last(parts).data.totals.enrolled).toBe(single.data.totals.enrolled);
+  }, 60_000);
+
+  it("avg_score works in parts, and is skipped (explicitly) alongside per-person signals", async () => {
+    const { slowCall, fastCall } = await handlers(
+      { requestBudgetMs: 5_000, participantsPageSize: 50 },
+      (p) => {
+        const orig = p.listCourseEnrolmentsPage.bind(p);
+        p.listCourseEnrolmentsPage = async (...a) => (await delay(450), orig(...a));
+      },
+    );
+    const args = { group_by: ["course"], signals: ["avg_score"] };
+    const parts = await untilComplete(slowCall, args);
+    const single = await fastCall(args);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(last(parts).data.totals).toEqual(single.data.totals);
+    expect(single.data.totals.avg_score.graded_items).toBeGreaterThan(0);
+    const mixed = await fastCall({ course_ids: [10], signals: ["started", "avg_score"] });
+    expect(mixed.data.skipped_signals.map((x: { signal: string }) => x.signal)).toEqual(["avg_score"]);
   }, 60_000);
 });
 

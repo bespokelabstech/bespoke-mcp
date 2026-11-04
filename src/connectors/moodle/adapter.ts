@@ -96,16 +96,15 @@ export class MoodleLearningAdapter implements LearningDataPort {
     });
   }
 
-  listCourseEnrolments(courseId: number): Promise<Enrolment[]> {
-    return this.cache.getOrLoad(`enrolments:${courseId}`, async () => {
-      const out: Enrolment[] = [];
-      for (let from = 0; ; from += this.opts.pageSize) {
-        const page = await this.listCourseEnrolmentsPage(courseId, from, this.opts.pageSize);
-        out.push(...page.rows);
-        if (page.done) break;
-      }
-      return out;
-    });
+  /** Assembled from the (cached) pages; not cached again as a whole, to avoid holding it twice. */
+  async listCourseEnrolments(courseId: number): Promise<Enrolment[]> {
+    const out: Enrolment[] = [];
+    for (let from = 0; ; from += this.opts.pageSize) {
+      const page = await this.listCourseEnrolmentsPage(courseId, from, this.opts.pageSize);
+      out.push(...page.rows);
+      if (page.done) break;
+    }
+    return out;
   }
 
   listCourseEnrolmentsPage(

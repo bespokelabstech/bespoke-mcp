@@ -178,7 +178,7 @@ export function mergePartials(a: PartialRow[], b: PartialRow[]): PartialRow[] {
   return [...out.values()];
 }
 
-const NUMERIC_FIELDS = [
+export const NUMERIC_FIELDS = [
   "enrolled",
   "site_ever",
   "site_window",

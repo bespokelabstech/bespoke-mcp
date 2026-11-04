@@ -252,3 +252,21 @@ describe("course-context errors", () => {
     expect(err.message).toMatch(/User not fully set-up.*required profile fields/);
   });
 });
+
+describe("cursor size", () => {
+  it("detects early when running state no longer fits a cursor", async () => {
+    const { cursorFits } = await import("@/core/cursor");
+    const small = {
+      v: 1 as const,
+      q: "q",
+      done: [1, 2],
+      state: { acc: Array.from({ length: 20 }, (_, i) => [[`Region ${i}`], 120, 80]) },
+    };
+    const big = {
+      ...small,
+      state: { acc: Array.from({ length: 700 }, (_, i) => [[`BRANCH NAME ${i} (0${i})`], 120, 80, 5]) },
+    };
+    expect(cursorFits(small)).toBe(true);
+    expect(cursorFits(big)).toBe(false);
+  });
+});

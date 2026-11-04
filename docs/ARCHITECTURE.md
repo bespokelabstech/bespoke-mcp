@@ -92,9 +92,11 @@ A future port registers its tools only for tenants that bind it.
   (`limits.requestBudgetMs` < Vercel `maxDuration` 60 s).
 - **Answers in parts.** `query_metrics` picks single / pages / people mode. Pages: the work
   unit is one enrolment page of one course (so a 6K-enrolment course splits mid-course);
-  people: per-person signals over > `maxPeopleForPersonSignals` people run in batches of
-  people, ordered by counting key so duplicate accounts stay together. The cursor is base64url
-  JSON (position + additive partial sums), HMAC-signed with a key derived from the access key
+  people: per-person signals always run in batches of people (one call when small), ordered
+  by counting key so duplicate accounts stay together and resumed by the last processed key
+  (stable if enrolments change between parts). The cursor is base64url
+  JSON (position + additive partial sums packed as positional arrays; size checked before each
+  further unit of work), HMAC-signed with a key derived from the access key
   and bound to a hash of the query. A timeout while reading a Moodle body is reported as a
   timeout, and a part that runs out of time returns what it finished plus the cursor.
 - Moodle's fixed reason for course-access failures ("User not fully set-up", "Site policy not
@@ -129,8 +131,8 @@ upstream call counts — never argument values or results.
 - **App activity is invisible per course** except through progress/completion. Opening a
   course or partly viewing an activity in the app leaves no trace the API exposes.
 - **History:** only the last access is kept; past windows are labelled `last_access_in_range`.
-- **Per-person signals** (`started`, `completion`) need one call per person: above 300 people
-  they are answered in several parts (≈ 1 s per person on staging at concurrency 2).
+- **Per-person signals** (`started`, `completion`) need one call per person and run in
+  batches (≈ 0.5–1 s per person on staging at concurrency 2), so large scopes take several parts.
   `list_people` filtered by `started` is still limited to 300 people.
 - **Org-wide distinct-people answers** across many courses may not fit one call.
 - A read-only Moodle plugin (aggregates, activity log, history) lifts all four — ROADMAP.

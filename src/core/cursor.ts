@@ -18,11 +18,16 @@ export interface CursorPayload {
   state: unknown;
 }
 
-const MAX_CURSOR_BYTES = 6_000;
+export const MAX_CURSOR_BYTES = 9_000;
 
 export function queryHash(args: Record<string, unknown>): string {
   const { cursor: _c, limit: _l, ...rest } = args;
   return createHash("sha256").update(stableStringify(rest)).digest("base64url").slice(0, 22);
+}
+
+/** True if this payload still fits a cursor (check early, before doing more work). */
+export function cursorFits(payload: CursorPayload): boolean {
+  return Math.ceil((Buffer.byteLength(JSON.stringify(payload)) * 4) / 3) <= MAX_CURSOR_BYTES * 0.9;
 }
 
 export function encodeCursor(payload: CursorPayload, secret: string): string {

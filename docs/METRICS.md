@@ -44,13 +44,13 @@ Filters match case-insensitively and exactly; Branch filters match the label, na
 
 ## Engagement signals
 
-| Signal                       | Definition                                                                       | Sees mobile app?                                                 | Cost                                              |
-| ---------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------- |
-| `started` (default)          | Completed at least one activity (course progress > 0%) or completed the course   | **Yes** — verified: an app PDF completion moved progress 0 → 25% | 1 call / person; > 300 people → answered in parts |
-| `completion`                 | `completed` and `progress %` over enrolments in courses with completion tracking | Yes                                                              | 1 call / person                                   |
-| `site_last_access` (default) | Last access to the site, incl. app logins; not per course                        | Yes **[verify]**                                                 | cheap                                             |
-| `web_course_access`          | Last time the course was opened in a web browser                                 | **No** — verified: opening a course in the app leaves it empty   | cheap                                             |
-| `avg_score`                  | Mean of graded quiz results (grade / max × 100) over graded quiz items           | Yes                                                              | 1 call / course                                   |
+| Signal                       | Definition                                                                       | Sees mobile app?                                                 | Cost                                                   |
+| ---------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------ |
+| `started` (default)          | Completed at least one activity (course progress > 0%) or completed the course   | **Yes** — verified: an app PDF completion moved progress 0 → 25% | 1 call / person; batched, answered in parts when large |
+| `completion`                 | `completed` and `progress %` over enrolments in courses with completion tracking | Yes                                                              | 1 call / person                                        |
+| `site_last_access` (default) | Last access to the site, incl. app logins; not per course                        | Yes **[verify]**                                                 | cheap                                                  |
+| `web_course_access`          | Last time the course was opened in a web browser                                 | **No** — verified: opening a course in the app leaves it empty   | cheap                                                  |
+| `avg_score`                  | Mean of graded quiz results (grade / max × 100) over graded quiz items           | Yes                                                              | 1 call / course                                        |
 
 Limits of `started`: opening a course or partly viewing an activity without completing it
 does not count; progress has no date, so `started` cannot be windowed.
@@ -98,14 +98,17 @@ Questions that do not fit one call (≈50 s) are answered **in parts**: the resp
 `complete: false`, `progress` and a signed `next_cursor` (running sums and position — the
 server stores nothing). Claude calls again with the same arguments plus the cursor.
 
-| Question type                                                                         | Work unit per part                                                       | Rows per part                                                                                    |
-| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| Enrolment-level, cheap signals (`site_last_access`, `web_course_access`, `avg_score`) | one page (500 enrolments) of one course — large courses split mid-course | grouped by course: rows for courses finished in that part; otherwise all rows with the last part |
-| Per-person signals (`started`, `completion`) over more than 300 people                | a batch of people (all their courses in one LMS call each)               | all rows with the last part                                                                      |
-| People-level counts without per-person signals                                        | must fit one call                                                        | —                                                                                                |
+| Question type                                                                         | Work unit per part                                                                           | Rows per part                                                                                    |
+| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Enrolment-level, cheap signals (`site_last_access`, `web_course_access`, `avg_score`) | one page (500 enrolments) of one course — large courses split mid-course                     | grouped by course: rows for courses finished in that part; otherwise all rows with the last part |
+| Per-person signals (`started`, `completion`)                                          | a batch of people (all their courses in one LMS call each), resumed by last processed person | all rows with the last part                                                                      |
+| People-level counts without per-person signals                                        | must fit one call                                                                            | —                                                                                                |
 
-`skipped_signals` lists any requested signal that could not be computed (e.g. `avg_score`
-without the grade report function). Final numbers from parts equal a single-pass answer
+`skipped_signals` lists any requested signal that could not be computed: `avg_score` without
+the grade report function, or `avg_score` requested together with `started`/`completion`
+(grade reports are per course; ask for it in a separate query). Breakdowns with too many
+groups to carry between parts (e.g. hundreds of branches) fail fast with a suggestion to
+group by course or add a filter. Final numbers from parts equal a single-pass answer
 (tested). Each part re-reads live data, so changes made in Moodle between parts can show up.
 
 ## Source map
