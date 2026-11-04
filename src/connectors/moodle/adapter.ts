@@ -1,12 +1,15 @@
 import { TtlCache } from "@/core/cache";
+import { mapLimit } from "@/core/concurrency";
 import type { MoodleSettings } from "@/core/env";
 import type {
   Category,
   Course,
+  Enrolment,
   LearningDataPort,
-  Participant,
   PersonCourse,
+  PersonGrades,
   PersonRecord,
+  SourceCapabilities,
 } from "@/ports/learning";
 import { MoodleClient } from "./client";
 import type { RawCustomFields } from "./schemas";
@@ -14,26 +17,33 @@ import {
   categoriesSchema,
   coursesByFieldSchema,
   enrolledUsersSchema,
+  gradeItemsSchema,
+  siteInfoSchema,
   usersByFieldSchema,
   usersCoursesSchema,
 } from "./schemas";
 
 /**
  * Moodle implementation of LearningDataPort using ONLY core read functions
- * (docs/MOODLE_SETUP.md lists the exact service function set):
- *   core_course_get_categories, core_course_get_courses_by_field,
- *   core_enrol_get_enrolled_users, core_user_get_users_by_field, core_enrol_get_users_courses.
+ * (docs/MOODLE_SETUP.md lists the exact service function set).
+ *
+ * Two-pass pull (performance): course enrolments are fetched WITHOUT profile fields —
+ * building custom fields is the expensive part of core_enrol_get_enrolled_users — and each
+ * person's profile is fetched once (batched by user id) and reused across courses.
  */
 
 export interface MoodleAdapterOptions {
   settings: MoodleSettings;
   pageSize: number;
   cacheTtlSeconds: number;
+  concurrency: number;
   fetchImpl?: typeof fetch;
 }
 
-/** Fields requested from core_enrol_get_enrolled_users — no email/phone/address. */
-const ENROLLED_USER_FIELDS = "id,username,firstname,lastname,roles,customfields,lastcourseaccess";
+/** Fields requested per enrolment — no custom fields, no email/phone/address. */
+const ENROLMENT_FIELDS = "id,username,firstname,lastname,roles,lastaccess,lastcourseaccess";
+const PROFILE_BATCH = 100;
+const GRADES_FUNCTION = "gradereport_user_get_grade_items";
 
 export class MoodleLearningAdapter implements LearningDataPort {
   readonly source = "moodle";
@@ -43,6 +53,14 @@ export class MoodleLearningAdapter implements LearningDataPort {
   constructor(private readonly opts: MoodleAdapterOptions) {
     this.client = new MoodleClient({ ...opts.settings, fetchImpl: opts.fetchImpl });
     this.cache = new TtlCache(opts.cacheTtlSeconds * 1000);
+  }
+
+  capabilities(): Promise<SourceCapabilities> {
+    return this.cache.getOrLoad("capabilities", async () => {
+      const info = await this.client.call("core_webservice_get_site_info", {}, siteInfoSchema);
+      const fns = new Set((info.functions ?? []).map((f) => f.name));
+      return { grades: fns.has(GRADES_FUNCTION) };
+    });
   }
 
   listCategories(): Promise<Category[]> {
@@ -69,7 +87,7 @@ export class MoodleLearningAdapter implements LearningDataPort {
           fullName: text(c.fullname),
           categoryId: c.categoryid,
           visible: c.visible === undefined || c.visible === null ? true : c.visible === 1,
-          // Only disclosed to accounts that can update the course: absent = unknown, not "off".
+          // Only disclosed to accounts that may update the course: absent = unknown, not "off".
           completionEnabled:
             c.enablecompletion === undefined || c.enablecompletion === null ? null : c.enablecompletion === 1,
           startDate: positiveOrNull(c.startdate),
@@ -78,9 +96,9 @@ export class MoodleLearningAdapter implements LearningDataPort {
     });
   }
 
-  listCourseParticipants(courseId: number): Promise<Participant[]> {
-    return this.cache.getOrLoad(`participants:${courseId}`, async () => {
-      const out: Participant[] = [];
+  listCourseEnrolments(courseId: number): Promise<Enrolment[]> {
+    return this.cache.getOrLoad(`enrolments:${courseId}`, async () => {
+      const out: Enrolment[] = [];
       for (let from = 0; ; from += this.opts.pageSize) {
         const page = await this.client.call(
           "core_enrol_get_enrolled_users",
@@ -88,7 +106,7 @@ export class MoodleLearningAdapter implements LearningDataPort {
             courseid: courseId,
             options: [
               { name: "onlyactive", value: 1 },
-              { name: "userfields", value: ENROLLED_USER_FIELDS },
+              { name: "userfields", value: ENROLMENT_FIELDS },
               { name: "limitfrom", value: from },
               { name: "limitnumber", value: this.opts.pageSize },
               { name: "sortby", value: "id" },
@@ -103,14 +121,41 @@ export class MoodleLearningAdapter implements LearningDataPort {
             firstName: text(u.firstname),
             lastName: text(u.lastname),
             courseRoles: (u.roles ?? []).map((r) => r.shortname),
-            profile: profileMap(u.customfields),
             lastCourseAccess: positiveOrNull(u.lastcourseaccess),
+            lastSiteAccess: positiveOrNull(u.lastaccess),
           });
+          // Profiles may arrive with the enrolment on older call shapes; reuse them if so.
+          if (u.customfields) this.cache.set(`profile:${u.id}`, Promise.resolve(profileMap(u.customfields)));
         }
         if (page.length < this.opts.pageSize) break;
       }
       return out;
     });
+  }
+
+  async getProfiles(userIds: number[]): Promise<Map<number, Record<string, string>>> {
+    const out = new Map<number, Record<string, string>>();
+    const missing: number[] = [];
+    for (const id of new Set(userIds)) {
+      const hit = this.cache.peek<Record<string, string>>(`profile:${id}`);
+      if (hit) out.set(id, await hit);
+      else missing.push(id);
+    }
+    const batches: number[][] = [];
+    for (let i = 0; i < missing.length; i += PROFILE_BATCH) batches.push(missing.slice(i, i + PROFILE_BATCH));
+    await mapLimit(batches, this.opts.concurrency, async (ids) => {
+      const rows = await this.client.call(
+        "core_user_get_users_by_field",
+        { field: "id", values: ids },
+        usersByFieldSchema,
+      );
+      for (const u of rows) {
+        const profile = profileMap(u.customfields);
+        out.set(u.id, profile);
+        this.cache.set(`profile:${u.id}`, Promise.resolve(profile));
+      }
+    });
+    return out;
   }
 
   async findPersonByUsername(username: string): Promise<PersonRecord | null> {
@@ -128,23 +173,42 @@ export class MoodleLearningAdapter implements LearningDataPort {
       lastName: text(u.lastname),
       profile: profileMap(u.customfields),
       suspended: u.suspended === undefined || u.suspended === null ? null : Boolean(u.suspended),
+      lastSiteAccess: positiveOrNull(u.lastaccess),
     };
   }
 
-  async listPersonCourses(userId: number): Promise<PersonCourse[]> {
-    const rows = await this.client.call(
-      "core_enrol_get_users_courses",
-      { userid: userId },
-      usersCoursesSchema,
-    );
-    return rows.map((c) => ({
-      courseId: c.id,
-      fullName: text(c.fullname),
-      lastAccess: positiveOrNull(c.lastaccess),
-      progressPct: c.progress === undefined || c.progress === null ? null : Math.round(c.progress * 10) / 10,
-      completed: c.completed ?? null,
-      completionEnabled: Boolean(c.enablecompletion),
-    }));
+  listPersonCourses(userId: number): Promise<PersonCourse[]> {
+    return this.cache.getOrLoad(`personcourses:${userId}`, async () => {
+      const rows = await this.client.call(
+        "core_enrol_get_users_courses",
+        { userid: userId },
+        usersCoursesSchema,
+      );
+      return rows.map((c) => ({
+        courseId: c.id,
+        fullName: text(c.fullname),
+        lastAccess: positiveOrNull(c.lastaccess),
+        progressPct:
+          c.progress === undefined || c.progress === null ? null : Math.round(c.progress * 10) / 10,
+        completed: c.completed ?? null,
+        completionEnabled: Boolean(c.enablecompletion),
+      }));
+    });
+  }
+
+  getCourseGrades(courseId: number): Promise<PersonGrades[]> {
+    return this.cache.getOrLoad(`grades:${courseId}`, async () => {
+      const res = await this.client.call(GRADES_FUNCTION, { courseid: courseId }, gradeItemsSchema);
+      return res.usergrades.map((g) => ({
+        userId: g.userid,
+        items: g.gradeitems.map((i) => ({
+          module: i.itemmodule ?? null,
+          type: i.itemtype ?? "",
+          raw: i.graderaw ?? null,
+          max: i.grademax ?? null,
+        })),
+      }));
+    });
   }
 }
 

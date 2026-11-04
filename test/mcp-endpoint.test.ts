@@ -68,7 +68,7 @@ describe("POST /api/mcp", () => {
     }
   });
 
-  it("initializes with tenant instructions and lists the five read-only tools", async () => {
+  it("lists the six general-purpose read-only tools", async () => {
     const init = await rpcBody(
       await POST(
         rpc("initialize", {
@@ -78,91 +78,177 @@ describe("POST /api/mcp", () => {
         }),
       ),
     );
-    expect(JSON.stringify(init)).toContain("Dealer");
+    expect(JSON.stringify(init)).toContain("web-only");
     const list = await rpcBody(await POST(rpc("tools/list", {})));
-    const tools = (list.result as { tools: Array<{ name: string; annotations: Record<string, boolean> }> })
-      .tools;
+    const tools = (
+      list.result as { tools: Array<{ name: string; title: string; annotations: Record<string, boolean> }> }
+    ).tools;
     expect(tools.map((t) => t.name).sort()).toEqual([
-      "get_access_summary",
-      "get_course_access",
-      "get_dealer_access",
-      "get_dimensions",
+      "describe_capabilities",
+      "get_person",
       "list_courses",
+      "list_dimension_values",
+      "list_people",
+      "query_metrics",
     ]);
     expect(
       tools.every((t) => t.annotations.readOnlyHint === true && t.annotations.destructiveHint === false),
     ).toBe(true);
+    expect(tools.find((t) => t.name === "get_person")!.title).toBe("Dealer detail");
   });
 
-  it("list_courses hides invisible courses and names categories", async () => {
+  it("describe_capabilities states each signal's definition and availability", async () => {
+    const { payload } = await callTool(POST, "describe_capabilities", {});
+    const web = payload.signals.find((s: { id: string }) => s.id === "web_course_access");
+    expect(web.sees_app_activity).toBe(false);
+    expect(payload.signals.find((s: { id: string }) => s.id === "avg_score").available).toBe(true);
+    expect(Object.keys(payload.population)).toEqual(["dealer", "legacy", "excluded", "default"]);
+  });
+
+  it("list_courses hides invisible courses and flags unnamed categories", async () => {
     const { payload } = await callTool(POST, "list_courses", {});
-    expect(payload.tenant).toBe("gla");
     expect(payload.data.courses.map((c: { id: number }) => c.id)).not.toContain(31);
-    expect(payload.data.courses.find((c: { id: number }) => c.id === 30).category.path).toBe(
-      "Product Training / Advanced",
-    );
-  });
-
-  it("list_courses flags categories it cannot name instead of returning a bare null", async () => {
-    const { payload } = await callTool(POST, "list_courses", {});
-    const hidden = payload.data.courses.find((c: { id: number }) => c.id === 40);
-    expect(hidden.category).toEqual({ id: 9, name: null, path: null });
-    expect(hidden.completion_tracked).toBeNull();
     expect(payload.warnings.join(" ")).toMatch(/id\(s\) 9 .*do not guess/);
-    expect(payload.warnings.join(" ")).toMatch(/null = unknown/);
+    expect(payload.diagnostics.ms).toBeGreaterThanOrEqual(0);
   });
 
-  it("get_access_summary returns grouped, enveloped metrics", async () => {
-    const { result, payload } = await callTool(POST, "get_access_summary", {
-      group_by: ["region", "level"],
+  it("query_metrics: dealers only by default, with population counts and look-alike notes", async () => {
+    const { result, payload } = await callTool(POST, "query_metrics", {
+      course_ids: [10, 11],
+      group_by: ["region"],
       recent_days: 30,
     });
     expect(result.isError).toBeFalsy();
-    expect(result.structuredContent).toBeDefined();
-    expect(payload.window.semantics).toBe("accessed_since");
-    expect(payload.data.unit).toBe("people");
-    const row = payload.data.rows[0];
-    expect(row.group).toHaveProperty("region");
-    expect(row.group).toHaveProperty("level");
-    expect(row.enrolled).toBe(row.accessed + row.never_accessed);
-    // rows partition the people total
+    expect(payload.data.complete).toBe(true);
+    expect(payload.data.population).toMatchObject({ legacy: 3, excluded: 6 });
+    expect(payload.data.totals.enrolled).toBe(payload.data.population.dealer);
+    expect(payload.data.totals.started.unknown).toBe(0);
     const sum = payload.data.rows.reduce((n: number, r: { enrolled: number }) => n + r.enrolled, 0);
-    expect(sum).toBe(payload.data.totals.people.enrolled);
+    expect(sum).toBe(payload.data.totals.enrolled);
+    expect(payload.warnings.join(" ")).toMatch(/"Visayas", "Visayas 1", "Visayas 2" are separate values/);
   });
 
-  it("get_access_summary warns on past ranges", async () => {
-    const { payload } = await callTool(POST, "get_access_summary", {
-      since: "2026-01-01",
-      until: "2026-01-31",
+  it("query_metrics: population can be combined on request", async () => {
+    const only = await callTool(POST, "query_metrics", { course_ids: [10], signals: ["site_last_access"] });
+    const both = await callTool(POST, "query_metrics", {
+      course_ids: [10],
+      signals: ["site_last_access"],
+      population: ["dealer", "legacy"],
     });
-    expect(payload.window.semantics).toBe("last_access_in_range");
-    expect(payload.warnings.join(" ")).toMatch(/LAST access|most recent access/);
+    expect(both.payload.data.totals.enrolled).toBe(only.payload.data.totals.enrolled + 3);
   });
 
-  it("get_course_access lists dealers with identifiers and N/A for empty values", async () => {
-    const { payload } = await callTool(POST, "get_course_access", {
+  it("query_metrics: per-course enrolment metrics with average score", async () => {
+    const { payload } = await callTool(POST, "query_metrics", {
+      group_by: ["course"],
+      signals: ["site_last_access", "avg_score"],
+    });
+    expect(payload.data.unit).toBe("enrolments");
+    expect(payload.data.complete).toBe(true);
+    expect(payload.data.next_cursor).toBeNull();
+    expect(payload.data.rows[0].group.course.name).toBeTruthy();
+    expect(payload.data.rows[0].avg_score.avg_score_pct).toBeGreaterThan(0);
+  });
+
+  it("query_metrics: web course access always carries its web-only caveat", async () => {
+    const { payload } = await callTool(POST, "query_metrics", {
+      course_ids: [10],
+      signals: ["web_course_access"],
+    });
+    expect(payload.warnings.join(" ")).toMatch(/Web only/);
+  });
+
+  it("list_people: who has not started, and legacy accounts for review", async () => {
+    const notStarted = await callTool(POST, "list_people", {
       course_id: 10,
-      status: "never_accessed",
+      where: { signal: "started", state: "no" },
       limit: 100,
     });
-    expect(payload.data.course.name).toBe("Welcome to Great Life");
-    expect(payload.data.people.every((p: { accessed: boolean }) => !p.accessed)).toBe(true);
-    expect(payload.data.identifier_label).toBe("Conso ID");
-    expect(payload.data.totals.never_accessed).toBe(payload.data.matched);
+    expect(notStarted.payload.data.people.every((p: { started: boolean }) => p.started === false)).toBe(true);
+    const legacy = await callTool(POST, "list_people", { course_id: 10, population: ["legacy"] });
+    expect(legacy.payload.data.people.map((p: { identifier: string }) => p.identifier).sort()).toEqual([
+      "fb 007700901",
+      "legacy.user",
+      "nl_0999_0007",
+    ]);
+    expect(legacy.payload.data.people.every((p: { status: string }) => p.status === "legacy")).toBe(true);
   });
 
-  it("get_dealer_access resolves a dealer by Conso ID", async () => {
-    const { payload } = await callTool(POST, "get_dealer_access", { identifier: "PC0100000000" });
-    expect(payload.data.person.identifier).toBe("pc0100000000");
-    expect(payload.data.person.counted_in_metrics).toBe(true);
+  it("get_person: repairs a dropped leading zero", async () => {
+    const { payload } = await callTool(POST, "get_person", { identifier: "03210000000" });
+    expect(payload.data.person.identifier).toBe("003210000000");
+    expect(payload.data.person.status).toBe("dealer");
     expect(payload.data.courses.length).toBeGreaterThan(0);
   });
 
   it("returns safe errors for invalid scope", async () => {
-    const { result, payload } = await callTool(POST, "get_course_access", { course_id: 31 });
+    const { result, payload } = await callTool(POST, "list_people", { course_id: 31 });
     expect(result.isError).toBe(true);
     expect(payload.error.code).toBe("not_found");
   });
+
+  it("accepts a category id whose name is hidden from the service account", async () => {
+    const { result, payload } = await callTool(POST, "query_metrics", {
+      category_ids: [9],
+      signals: ["site_last_access"],
+    });
+    expect(result.isError).toBeFalsy();
+    expect(payload.scope.courses.map((c: { id: number }) => c.id)).toEqual([40]);
+  });
+});
+
+describe("answers in parts (stateless cursor)", () => {
+  it("continues across calls and the final part matches a single-pass answer", async () => {
+    const { buildMcpHandler } = await import("@/core/server");
+    const { loadTenant } = await import("@/tenants/registry");
+    const { FixtureLearningAdapter } = await import("@/connectors/fixture/adapter");
+    const tenant = loadTenant("gla", "staging");
+    const slow = new FixtureLearningAdapter({ nowSec: Math.floor(Date.now() / 1000) });
+    const orig = slow.listCourseEnrolments.bind(slow);
+    slow.listCourseEnrolments = async (id: number) => {
+      await new Promise((r) => setTimeout(r, 1600));
+      return orig(id);
+    };
+    const cfg = {
+      tenant: { ...tenant, limits: { ...tenant.limits, requestBudgetMs: 5_000 } },
+      env: "staging" as const,
+      accessKeys: [KEY],
+      dataSource: { kind: "none" as const },
+    };
+    const handler = buildMcpHandler(cfg, slow);
+    const call = async (args: Record<string, unknown>) => {
+      const body = await rpcBody(
+        await handler(rpc("tools/call", { name: "query_metrics", arguments: args })),
+      );
+      return JSON.parse((body.result as { content: Array<{ text: string }> }).content[0]!.text);
+    };
+    const args = { group_by: ["region"], count_by: "enrolments", signals: ["site_last_access"] };
+    const first = await call(args);
+    expect(first.data.complete).toBe(false);
+    expect(first.data.next_cursor).toBeTruthy();
+    expect(first.data.rows).toEqual([]); // region rows need every course; none are shown early
+    let page = first;
+    let guard = 0;
+    while (!page.data.complete && guard++ < 5) page = await call({ ...args, cursor: page.data.next_cursor });
+    expect(page.data.complete).toBe(true);
+    expect(page.data.progress.courses_done).toBe(page.data.progress.courses_total);
+
+    // Same question answered by a fast source in one pass gives identical numbers.
+    const fast = buildMcpHandler(
+      { ...cfg, tenant },
+      new FixtureLearningAdapter({ nowSec: Math.floor(Date.now() / 1000) }),
+    );
+    const body = await rpcBody(await fast(rpc("tools/call", { name: "query_metrics", arguments: args })));
+    const single = JSON.parse((body.result as { content: Array<{ text: string }> }).content[0]!.text);
+    expect(single.data.complete).toBe(true);
+    expect(page.data.totals).toEqual(single.data.totals);
+    expect(page.data.rows).toEqual(single.data.rows);
+    expect(page.data.population).toEqual(single.data.population);
+
+    // A tampered or mismatched cursor is rejected.
+    const bad = await call({ ...args, group_by: ["level"], cursor: first.data.next_cursor });
+    expect(bad.error.code).toBe("invalid_input");
+  }, 30_000);
 });
 
 describe("misconfiguration", () => {

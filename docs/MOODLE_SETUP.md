@@ -26,18 +26,19 @@ team mailbox. No course enrolments.
 _Users → Permissions → Define roles → Add_: context type **System**, archetype none.
 Allow only:
 
-| Capability                                       | Why                                                                             |
-| ------------------------------------------------ | ------------------------------------------------------------------------------- |
-| `webservice/rest:use`                            | Call the REST protocol                                                          |
-| `moodle/course:view`                             | Access courses without being enrolled                                           |
-| `moodle/course:viewparticipants`                 | `core_enrol_get_enrolled_users`, `core_enrol_get_users_courses`                 |
-| `moodle/course:enrolreview`                      | `onlyactive` option                                                             |
-| `moodle/site:accessallgroups`                    | Courses in separate-groups mode                                                 |
-| `moodle/user:viewdetails`                        | Profile fields of other users                                                   |
-| `moodle/user:viewalldetails`                     | **[verify]** username / non-public profile fields                               |
-| `moodle/course:viewhiddenuserfields`             | Last-access when hidden by `hiddenuserfields`                                   |
-| `moodle/category:viewhiddencategories`           | Category names when courses sit in hidden categories (staging: categories 3, 7) |
-| `report/progress:view`, `report/completion:view` | **[verify]** others' progress/completion in `core_enrol_get_users_courses`      |
+| Capability                                       | Why                                                                                 |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `webservice/rest:use`                            | Call the REST protocol                                                              |
+| `moodle/course:view`                             | Access courses without being enrolled                                               |
+| `moodle/course:viewparticipants`                 | `core_enrol_get_enrolled_users`, `core_enrol_get_users_courses`                     |
+| `moodle/course:enrolreview`                      | `onlyactive` option                                                                 |
+| `moodle/site:accessallgroups`                    | Courses in separate-groups mode                                                     |
+| `moodle/user:viewdetails`                        | Profile fields of other users                                                       |
+| `moodle/user:viewalldetails`                     | **[verify]** username / non-public profile fields                                   |
+| `moodle/course:viewhiddenuserfields`             | Last-access when hidden by `hiddenuserfields`                                       |
+| `moodle/category:viewhiddencategories`           | Category names when courses sit in hidden categories (staging: categories 3, 7)     |
+| `report/progress:view`, `report/completion:view` | Others' progress/completion in `core_enrol_get_users_courses` (verified on staging) |
+| `gradereport/user:view`, `moodle/grade:viewall`  | Optional: quiz grades for `avg_score`                                               |
 
 Assign the role to `svc_mcp_readonly` at system level (_Assign system roles_).
 
@@ -58,8 +59,24 @@ no file up/download. Add exactly these functions (all read-only):
 - `core_enrol_get_enrolled_users`
 - `core_user_get_users_by_field`
 - `core_enrol_get_users_courses`
+- `gradereport_user_get_grade_items` (optional, enables `avg_score`)
 
 _Authorised users_ → add `svc_mcp_readonly`.
+
+## 4b. Service-account prerequisites (otherwise every course call fails)
+
+Moodle runs account checks when entering a course. Both of these surfaced on staging as
+`errorcoursecontextnotvalid`; the server now reports Moodle's reason in the tool error.
+
+1. **Required profile fields filled.** GLA has required custom fields (`level`,
+   `Region_Dropdown`, `branch_code`, possibly more — see _Users → User profile fields_). Give
+   the service account placeholder values (e.g. the UAT test values); leave
+   `dealer_conso_id` empty unless required. Side effect: the GLA admin dashboard counts this
+   account +1 in that branch/region.
+2. **Site policy accepted.** _Users → Privacy and policies → User agreements_ → the service
+   account → **Accept** on its behalf. **Repeat whenever a new policy version is published.**
+
+Both, and everything above, must be redone after every staging refresh from production.
 
 ## 5. Token
 
@@ -79,15 +96,14 @@ curl -s https://gla-staging.bihasa.ph/webservice/rest/server.php \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("username"), sorted(f["name"] for f in d.get("functions",[])))'
 ```
 
-Expect `svc_mcp_readonly` and exactly the six functions above.
+Expect `svc_mcp_readonly` and exactly the functions above (6, or 7 with the grade report).
 
-## 7. Day-1 checks on staging
+## 7. Checks after (re)provisioning
 
-1. Open a Course in the **mobile app** as a UAT tester, then check that tester's last access
-   via `get_course_access` (does the app update `lastcourseaccess`?).
-2. Time a full `get_access_summary` across all Courses (logs: `tool.ok` → `ms`,
-   `upstream_calls`). If it hits `scope_too_large`, lower `maxCoursesPerRequest` or raise
-   `participantsPageSize` in the tenant config.
-3. Confirm `level`, `Region_Dropdown`, `branch_code`, `dealer_conso_id` come back populated
-   (profile field visibility for the service role).
-4. `get_dealer_access` for a UAT tester: are `progress_pct` / `completed` filled?
+1. In Claude: `describe_capabilities` — `lms_configured: true`, `avg_score.available` as expected.
+2. `query_metrics` for one course — `population` shows dealer/legacy/excluded counts and
+   `site_last_access.ever` is not 0 for everyone (otherwise last access is hidden from the role).
+3. `get_person` for a known tester — `progress_pct` filled for courses they progressed in.
+
+Verified on staging (2026-11-04): opening a course in the **mobile app** does not update
+web course access; completing an activity in the app does move progress (0 → 25%).

@@ -1,20 +1,23 @@
 import type {
   Category,
   Course,
+  Enrolment,
   LearningDataPort,
-  Participant,
   PersonCourse,
+  PersonGrades,
   PersonRecord,
+  SourceCapabilities,
 } from "@/ports/learning";
 
 /**
  * Deterministic SYNTHETIC data for local development and tests (MCP_DATA_SOURCE=fixture).
  * No real names or records. Refused on Vercel by the startup guardrails.
  *
- * Shapes mirror the GLA profile fields (level, Region_Dropdown, branch_code,
- * dealer_conso_id) including the awkward cases the metrics must handle:
- * empty values, legacy bare branch codes, junk branch values, UAT accounts,
- * staff without an identifier, and a non-student role.
+ * Mirrors what was sampled on GLA staging (patterns only): canonical Conso IDs
+ * (branch code + 8 digits), PC alphanumeric IDs, 11-digit IDs with a dropped leading zero
+ * (duplicate accounts), legacy formats, staff at "PC Center of Excellence", dummy IDs, the
+ * UAT test series, non-learner roles, region "families" (Visayas vs Visayas 1/2), web course
+ * access that the app never updates, and site access that it does.
  */
 
 const DAY = 86_400;
@@ -33,7 +36,14 @@ export interface FixtureOptions {
   seed?: number;
 }
 
-export const FIXTURE_REGIONS = ["Metro Manila", "North Luzon", "South Luzon", "Visayas", "Mindanao"];
+export const FIXTURE_REGIONS = [
+  "Mega Manila",
+  "North Luzon",
+  "Visayas",
+  "Visayas 1",
+  "Visayas 2",
+  "Mindanao 3",
+];
 export const FIXTURE_LEVELS = [
   "Great Life Builder",
   "Great Life Manager",
@@ -49,14 +59,30 @@ export const FIXTURE_BRANCHES = [
   "DAVAO (0575c)",
 ];
 
-interface FixturePerson {
+export interface FixturePerson {
   userId: number;
   username: string;
   firstName: string;
   lastName: string;
   profile: Record<string, string>;
   role: string;
+  lastSiteAccess: number | null;
 }
+
+/** Edge-case accounts with fixed ids, used by tests. */
+export const EDGE = {
+  dealerAlnum: 9001, // valid alphanumeric Conso ID
+  dupDropped0: 9002, // 11-digit duplicate of dealer 1000 (same person)
+  legacyNone: 9003, // no Conso ID, non-Conso username
+  legacyFb: 9004, // "fb 007700901"
+  legacyNl: 9005, // "nl_0999_0007"
+  staff: 9006, // PC Center of Excellence, 4-digit id
+  dummyRepeat: 9007, // 123123123123
+  dummyOnes: 9008, // 111111111111
+  uat: 9009, // username in the staging UAT range
+  teacher: 9010, // editingteacher role
+  manager: 9011, // redemptionmanager role
+} as const;
 
 export class FixtureLearningAdapter implements LearningDataPort {
   readonly source = "fixture";
@@ -66,158 +92,102 @@ export class FixtureLearningAdapter implements LearningDataPort {
     { id: 4, name: "Advanced", parentId: 3, pathIds: [3, 4] },
   ];
   readonly courses: Course[] = [
-    {
-      id: 10,
-      shortName: "ONB101",
-      fullName: "Welcome to Great Life",
-      categoryId: 2,
-      visible: true,
-      completionEnabled: true,
-      startDate: null,
-      endDate: null,
-    },
-    {
-      id: 11,
-      shortName: "ONB102",
-      fullName: "Business Basics",
-      categoryId: 2,
-      visible: true,
-      completionEnabled: true,
-      startDate: null,
-      endDate: null,
-    },
-    {
-      id: 20,
-      shortName: "PRD201",
-      fullName: "Product Knowledge",
-      categoryId: 3,
-      visible: true,
-      completionEnabled: true,
-      startDate: null,
-      endDate: null,
-    },
-    {
-      id: 21,
-      shortName: "PRD202",
-      fullName: "Selling Skills",
-      categoryId: 3,
-      visible: true,
-      completionEnabled: false,
-      startDate: null,
-      endDate: null,
-    },
-    {
-      id: 30,
-      shortName: "ADV301",
-      fullName: "Leadership",
-      categoryId: 4,
-      visible: true,
-      completionEnabled: true,
-      startDate: null,
-      endDate: null,
-    },
-    {
-      id: 40,
-      shortName: "PRD-HIDDEN-CAT",
-      fullName: "Coffee & Capsules",
-      categoryId: 9, // not in `categories`: models a hidden category
-      visible: true,
-      completionEnabled: null,
-      startDate: null,
-      endDate: null,
-    },
-    {
-      id: 31,
-      shortName: "HID",
-      fullName: "Hidden Draft",
-      categoryId: 4,
-      visible: false,
-      completionEnabled: true,
-      startDate: null,
-      endDate: null,
-    },
+    course(10, "ONB101", "Welcome to Great Life", 2, true),
+    course(11, "ONB102", "Business Basics", 2, true),
+    course(20, "PRD201", "Product Knowledge", 3, true),
+    course(21, "PRD202", "Selling Skills", 3, false),
+    course(30, "ADV301", "Leadership", 4, true),
+    // A visible course inside a category the service account cannot see (as on staging).
+    { ...course(40, "PRD-HIDDEN-CAT", "Coffee & Capsules", 9, true), completionEnabled: null },
+    { ...course(31, "HID", "Hidden Draft", 4, true), visible: false },
   ];
   readonly people: FixturePerson[] = [];
-  /** courseId -> userId -> lastCourseAccess */
+  /** courseId -> userId -> lastCourseAccess (web only) */
   readonly access = new Map<number, Map<number, number | null>>();
-  readonly progress = new Map<string, { progress: number; completed: boolean }>();
+  readonly progress = new Map<string, { progress: number; completed: boolean; score: number | null }>();
 
   constructor(private readonly opts: FixtureOptions) {
     const rand = rng(opts.seed ?? 42);
     const n = opts.people ?? 120;
     const pick = <T>(xs: T[]): T => xs[Math.floor(rand() * xs.length)]!;
+    const site = () => (rand() < 0.25 ? null : opts.nowSec - Math.floor(rand() * 120 * DAY));
+
     for (let i = 0; i < n; i++) {
-      const userId = 1000 + i;
-      const conso = `pc${String(100000000 + i).padStart(10, "0")}`.slice(0, 12);
-      const profile: Record<string, string> = {
-        dealer_conso_id: conso,
-        level: i % 17 === 0 ? "" : pick(FIXTURE_LEVELS),
-        Region_Dropdown: i % 13 === 0 ? "" : pick(FIXTURE_REGIONS),
-        branch_code: i % 29 === 0 ? "0032" : i % 31 === 0 ? "11111111111" : pick(FIXTURE_BRANCHES),
-      };
+      const branch = i % 29 === 0 ? "0032" : pick(FIXTURE_BRANCHES);
+      const code = /\((\d{4})/.exec(branch)?.[1] ?? "0032";
+      const conso = `${code}${String(10_000_000 + i).slice(-8)}`;
       this.people.push({
-        userId,
+        userId: 1000 + i,
         username: conso,
-        firstName: `Dealer`,
-        lastName: `${String(i).padStart(3, "0")}`,
-        profile,
+        firstName: "Dealer",
+        lastName: String(i).padStart(3, "0"),
+        profile: {
+          dealer_conso_id: conso,
+          level: i % 17 === 0 ? "" : pick(FIXTURE_LEVELS),
+          Region_Dropdown: i % 13 === 0 ? "" : pick(FIXTURE_REGIONS),
+          branch_code: branch,
+        },
         role: "student",
+        lastSiteAccess: site(),
       });
     }
-    // Edge cases.
-    this.people.push({
-      userId: 9001,
-      username: "111111111125",
-      firstName: "UAT",
-      lastName: "Tester 06",
-      profile: {
-        dealer_conso_id: "111111111125",
-        level: "Great Life Manager",
-        Region_Dropdown: "Metro Manila",
-        branch_code: "11111111111",
-      },
-      role: "student",
+    const first = this.people[0]!;
+    const edge = (
+      userId: number,
+      username: string,
+      profile: Record<string, string>,
+      role = "student",
+    ): void => {
+      this.people.push({
+        userId,
+        username,
+        firstName: "Edge",
+        lastName: String(userId),
+        profile: {
+          level: "Great Life Manager",
+          Region_Dropdown: "Mega Manila",
+          branch_code: "CUBAO (0101)",
+          ...profile,
+        },
+        role,
+        lastSiteAccess: opts.nowSec - DAY,
+      });
+    };
+    edge(EDGE.dealerAlnum, "500000j99901", { dealer_conso_id: "500000j99901" });
+    edge(EDGE.dupDropped0, "dup.account", {
+      ...first.profile,
+      dealer_conso_id: first.username.replace(/^0/, ""),
     });
-    this.people.push({
-      userId: 9002,
-      username: "staff.jdoe",
-      firstName: "Staff",
-      lastName: "Member",
-      profile: {},
-      role: "student",
-    });
-    this.people.push({
-      userId: 9003,
-      username: "pcmanager001",
-      firstName: "Branch",
-      lastName: "Manager",
-      profile: { dealer_conso_id: "pcmanager001" },
-      role: "redemptionmanager",
-    });
-    this.people.push({
-      userId: 9004,
-      username: "teacher01",
-      firstName: "Course",
-      lastName: "Teacher",
-      profile: {},
-      role: "editingteacher",
-    });
+    edge(EDGE.legacyNone, "legacy.user", {});
+    edge(EDGE.legacyFb, "fb.user", { dealer_conso_id: "fb 007700901" });
+    edge(EDGE.legacyNl, "nl.user", { dealer_conso_id: "nl_0999_0007" });
+    edge(EDGE.staff, "staff.4321", { dealer_conso_id: "4321", level: "PC Center of Excellence" });
+    edge(EDGE.dummyRepeat, "aimon.test", { dealer_conso_id: "123123123123" });
+    edge(EDGE.dummyOnes, "admin.user", { dealer_conso_id: "111111111111" });
+    edge(EDGE.uat, "111111111125", { dealer_conso_id: "111111111125" });
+    edge(EDGE.teacher, "teacher01", {}, "editingteacher");
+    edge(EDGE.manager, "pcmanager001", { dealer_conso_id: "pcmanager01" }, "redemptionmanager");
 
     for (const c of this.courses) {
       const m = new Map<number, number | null>();
       for (const p of this.people) {
         if (rand() < 0.15 && p.userId < 9000) continue; // not enrolled
-        const r = rand();
-        const last = r < 0.3 ? null : opts.nowSec - Math.floor(rand() * 120 * DAY);
-        m.set(p.userId, last);
-        const prog = last === null ? 0 : Math.round(rand() * 100);
+        // Web course access is rare (the app never updates it).
+        m.set(p.userId, rand() < 0.08 ? opts.nowSec - Math.floor(rand() * 90 * DAY) : null);
+        const prog = rand() < 0.4 ? 0 : Math.round(rand() * 100);
+        const completed = prog === 100 || (prog > 80 && rand() < 0.5);
         this.progress.set(`${p.userId}:${c.id}`, {
           progress: prog,
-          completed: prog === 100 || (prog > 80 && rand() < 0.5),
+          completed,
+          score: prog > 0 ? Math.round(40 + rand() * 60) : null,
         });
       }
       this.access.set(c.id, m);
     }
+  }
+
+  async capabilities(): Promise<SourceCapabilities> {
+    return { grades: true };
   }
 
   async listCategories(): Promise<Category[]> {
@@ -228,7 +198,7 @@ export class FixtureLearningAdapter implements LearningDataPort {
     return this.courses;
   }
 
-  async listCourseParticipants(courseId: number): Promise<Participant[]> {
+  async listCourseEnrolments(courseId: number): Promise<Enrolment[]> {
     const m = this.access.get(courseId) ?? new Map();
     return this.people
       .filter((p) => m.has(p.userId))
@@ -238,9 +208,14 @@ export class FixtureLearningAdapter implements LearningDataPort {
         firstName: p.firstName,
         lastName: p.lastName,
         courseRoles: [p.role],
-        profile: p.profile,
         lastCourseAccess: m.get(p.userId) ?? null,
+        lastSiteAccess: p.lastSiteAccess,
       }));
+  }
+
+  async getProfiles(userIds: number[]): Promise<Map<number, Record<string, string>>> {
+    const want = new Set(userIds);
+    return new Map(this.people.filter((p) => want.has(p.userId)).map((p) => [p.userId, p.profile]));
   }
 
   async findPersonByUsername(username: string): Promise<PersonRecord | null> {
@@ -253,6 +228,7 @@ export class FixtureLearningAdapter implements LearningDataPort {
           lastName: p.lastName,
           profile: p.profile,
           suspended: false,
+          lastSiteAccess: p.lastSiteAccess,
         }
       : null;
   }
@@ -262,14 +238,48 @@ export class FixtureLearningAdapter implements LearningDataPort {
       .filter((c) => this.access.get(c.id)?.has(userId))
       .map((c) => {
         const pr = this.progress.get(`${userId}:${c.id}`);
+        const tracked = c.completionEnabled === true;
         return {
           courseId: c.id,
           fullName: c.fullName,
           lastAccess: this.access.get(c.id)?.get(userId) ?? null,
-          progressPct: c.completionEnabled ? (pr?.progress ?? null) : null,
-          completed: c.completionEnabled ? (pr?.completed ?? null) : null,
-          completionEnabled: c.completionEnabled === true,
+          progressPct: tracked ? (pr?.progress ?? null) : null,
+          completed: tracked ? (pr?.completed ?? null) : null,
+          completionEnabled: tracked,
         };
       });
   }
+
+  async getCourseGrades(courseId: number): Promise<PersonGrades[]> {
+    const m = this.access.get(courseId) ?? new Map();
+    return [...m.keys()].map((userId) => {
+      const score = this.progress.get(`${userId}:${courseId}`)?.score ?? null;
+      return {
+        userId,
+        items: [
+          { module: "quiz", type: "mod", raw: score, max: score === null ? null : 100 },
+          { module: null, type: "course", raw: score, max: 100 },
+        ],
+      };
+    });
+  }
+}
+
+function course(
+  id: number,
+  shortName: string,
+  fullName: string,
+  categoryId: number,
+  completion: boolean,
+): Course {
+  return {
+    id,
+    shortName,
+    fullName,
+    categoryId,
+    visible: true,
+    completionEnabled: completion,
+    startDate: null,
+    endDate: null,
+  };
 }

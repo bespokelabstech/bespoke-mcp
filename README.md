@@ -18,15 +18,16 @@ Claude (custom connector, x-api-key) ──HTTPS──▶ Vercel: /api/mcp (this
 - Read-only by construction: the Moodle token's web service contains only read functions,
   and every tool is annotated `readOnlyHint: true`.
 
-## Tools (tenant `gla`)
+## Tools
 
-| Tool                 | Answers                                                                                                                 |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `list_courses`       | Which Courses exist (id, name, category, completion tracked)                                                            |
-| `get_dimensions`     | Regions / Dealer Levels / Branches as stored in profiles, with Dealer counts                                            |
-| `get_access_summary` | Enrolled vs accessed vs never accessed, by Region / Dealer Level / Branch / Course, optional time window and completion |
-| `get_course_access`  | One Course → the Dealers in it (Conso ID, profile values, last access), filterable                                      |
-| `get_dealer_access`  | One Dealer (by Conso ID) → every Course with last access, progress, completion                                          |
+| Tool                    | Answers                                                                                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `describe_capabilities` | What can be answered here: signals, dimensions, populations, limits — with definitions                           |
+| `list_courses`          | Course catalogue (id, name, category, completion tracked)                                                        |
+| `list_dimension_values` | Region / Dealer Level / Branch values as stored, with Dealer counts                                              |
+| `query_metrics`         | Signals (started, completion, app/site access, web access, avg score) × grouping × filters × window × population |
+| `list_people`           | Dealers in a Course: profile values, status, access, progress — filterable                                       |
+| `get_person`            | One Dealer by Conso ID: every Course with started / progress / completion                                        |
 
 Metric definitions: [`docs/METRICS.md`](docs/METRICS.md).
 

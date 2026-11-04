@@ -36,7 +36,7 @@ export const tenantConfigSchema = z.object({
     /** Singular noun for an eligible learner, e.g. "Dealer". */
     person: z.string().min(1),
     personPlural: z.string().min(1),
-    /** snake_case key used in tool names, e.g. "dealer" -> get_dealer_access. */
+    /** snake_case key for the counted population, e.g. "dealer" (population: ["dealer", "legacy"]). */
     personKey: z.string().regex(/^[a-z][a-z0-9_]*$/),
     course: z.string().min(1),
     coursePlural: z.string().min(1),
@@ -55,25 +55,40 @@ export const tenantConfigSchema = z.object({
   /** How a person is identified across systems (e.g. Conso ID). */
   identity: z.object({
     label: z.string().min(1),
-    /** Profile field holding the identifier; may be empty on legacy accounts. */
+    /** Profile field holding the identifier; may be empty or malformed on legacy accounts. */
     profileField: z.string().min(1),
-    /** If the profile field is empty, a username matching this pattern is the identifier. */
-    usernamePattern: z.string().min(1),
+    /** A normalised identifier matching this is structurally valid. */
+    validPattern: z.string().min(1),
+    /** Numeric identifiers of this length are left-padded with zeros to `padNumericTo`. */
+    padNumericFrom: z.number().int().positive().optional(),
+    padNumericTo: z.number().int().positive().optional(),
   }),
 
-  /** Who counts as an eligible person (e.g. a dealer) in every metric. */
+  /**
+   * Who counts. Every enrolled account gets exactly one status:
+   *   person   — structurally valid identifier, not excluded (counted, e.g. "Dealer");
+   *   legacy   — no identifier, or one in an old/malformed format (shown, not counted);
+   *   excluded — test, dummy, staff or non-learner role (shown, not counted).
+   */
   eligibility: z.object({
-    /** Must hold at least one of these course roles in the course. */
+    /** Must hold at least one of these course roles to be a learner at all. */
     requiredCourseRoles: z.array(z.string()).min(1),
-    /** Must have an identifier (profile field or username pattern). */
-    requireIdentity: z.boolean(),
+    /** Label for the `legacy` status, e.g. "Legacy". */
+    legacyLabel: z.string().min(1),
     exclude: z.object({
       usernames: z.array(z.string()).default([]),
       /** Inclusive [from, to]; numeric strings of equal length compare numerically. */
       usernameRanges: z.array(usernameRange).default([]),
       courseRoles: z.array(z.string()).default([]),
+      /** Values of the `level` dimension that mark staff, e.g. "PC Center of Excellence". */
+      staffLevels: z.array(z.string()).default([]),
+      /** Regexes on the normalised identifier that mark dummy/placeholder accounts. */
+      dummyIdentifierPatterns: z.array(z.string()).default([]),
     }),
   }),
+
+  /** Which graded items count towards avg_score. */
+  scoring: z.object({ itemModules: z.array(z.string().min(1)).min(1) }).default({ itemModules: ["quiz"] }),
 
   courses: z.object({
     /** Category ids (and their sub-categories) in scope. Empty = all categories. */
@@ -86,8 +101,8 @@ export const tenantConfigSchema = z.object({
     maxCoursesPerRequest: z.number().int().positive(),
     /** Page size for paged participant pulls. */
     participantsPageSize: z.number().int().min(50).max(2000),
-    /** Max people for which per-person completion is fetched in one request. */
-    maxPeopleForCompletion: z.number().int().positive(),
+    /** Max people for which per-person signals (started, completion) are fetched in one request. */
+    maxPeopleForPersonSignals: z.number().int().positive(),
     /** Max concurrent upstream calls per request. */
     upstreamConcurrency: z.number().int().min(1).max(16),
     /** Wall-clock budget per tool call (ms); must stay below the function maxDuration. */

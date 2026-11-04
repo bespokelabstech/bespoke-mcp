@@ -126,6 +126,18 @@ function parseResult<S extends z.ZodType>(wsfunction: string, json: unknown, sch
         { wsfunction, errorcode },
       );
     }
+    // Course-context failures wrap a fixed Moodle reason ("User not fully set-up", "Site policy
+    // not agreed", "Course or activity not accessible"); surfacing it turns a vague error into
+    // an actionable one. Tags/links are stripped and the length is capped.
+    const reason = errorcode === "errorcoursecontextnotvalid" ? contextReason(json) : null;
+    if (reason) {
+      throw new AppError(
+        "upstream_denied",
+        `The LMS refused course access for the service account (${wsfunction}): ${reason}.` +
+          (CONTEXT_HINTS.find(([re]) => re.test(reason))?.[1] ?? ""),
+        { wsfunction, errorcode, reason },
+      );
+    }
     throw new AppError("upstream_error", `The LMS returned an error (${wsfunction}: ${errorcode}).`, {
       wsfunction,
       errorcode,
@@ -139,6 +151,30 @@ function parseResult<S extends z.ZodType>(wsfunction: string, json: unknown, sch
     });
   }
   return parsed.data;
+}
+
+const CONTEXT_HINTS: Array<[RegExp, string]> = [
+  [
+    /policy/i,
+    " Accept the site policy for the service account (Users → Privacy and policies → User agreements).",
+  ],
+  [/not fully set-?up/i, " Fill the service account's required profile fields."],
+  [
+    /not accessible|not enrolled/i,
+    " Check the service role has moodle/course:view and no category/course override.",
+  ],
+];
+
+function contextReason(json: unknown): string | null {
+  const message = String((json as Record<string, unknown>).message ?? "");
+  const m = /context error message was:\s*(.+)$/is.exec(message);
+  if (!m) return null;
+  const clean = m[1]!
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/[\s:.]+$/, "")
+    .trim();
+  return clean ? clean.slice(0, 120) : null;
 }
 
 /**

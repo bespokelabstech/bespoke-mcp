@@ -34,7 +34,11 @@ export async function resolveCourseScope(
   if (input.category_ids?.length) {
     const categories = await port.listCategories();
     const byId = new Map(categories.map((c) => [c.id, c]));
-    const unknown = input.category_ids.filter((id) => !byId.has(id));
+    // A category may be hidden from the service account while its courses are visible, so a
+    // category is known if it is listed OR any in-scope course sits in it.
+    const unknown = input.category_ids.filter(
+      (id) => !byId.has(id) && !courses.some((c) => c.categoryId === id),
+    );
     if (unknown.length) throw new AppError("not_found", `Unknown category id(s): ${unknown.join(", ")}.`);
     courses = courses.filter((c) => inCategories(c, input.category_ids!, byId));
   }

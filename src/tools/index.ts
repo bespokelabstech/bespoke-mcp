@@ -1,21 +1,22 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { registerGetAccessSummary } from "./get-access-summary";
-import { registerGetCourseAccess } from "./get-course-access";
-import { registerGetDimensions } from "./get-dimensions";
-import { registerGetPersonAccess } from "./get-person-access";
+import { registerDescribeCapabilities } from "./describe-capabilities";
+import { registerGetPerson } from "./get-person";
 import { registerListCourses } from "./list-courses";
+import { registerListDimensionValues } from "./list-dimension-values";
+import { registerListPeople } from "./list-people";
+import { registerQueryMetrics } from "./query-metrics";
 import type { ToolDeps } from "./runtime";
 
 /**
- * Register the tools this tenant supports. Learning tools are always listed (they report
- * "not configured" until the LMS credentials exist) so the connector can be wired up and
- * tested in Claude before the LMS token is issued. Future capability ports (rewards,
- * dealer directory) register their tools only when the tenant binds that port.
+ * Six general-purpose, read-only capabilities. They are listed even before LMS credentials
+ * exist (tools then answer "not configured") so the connector can be wired up first. Future
+ * ports (rewards, dealer directory) register their tools only for tenants that bind them.
  */
 export function registerTools(server: McpServer, deps: ToolDeps): void {
+  registerDescribeCapabilities(server, deps);
   registerListCourses(server, deps);
-  registerGetDimensions(server, deps);
-  registerGetAccessSummary(server, deps);
-  registerGetCourseAccess(server, deps);
-  registerGetPersonAccess(server, deps);
+  registerListDimensionValues(server, deps);
+  registerQueryMetrics(server, deps);
+  registerListPeople(server, deps);
+  registerGetPerson(server, deps);
 }
