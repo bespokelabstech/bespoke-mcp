@@ -213,6 +213,16 @@ export class FixtureLearningAdapter implements LearningDataPort {
       }));
   }
 
+  async listCourseEnrolmentsPage(
+    courseId: number,
+    offset: number,
+    limit: number,
+  ): Promise<{ rows: Enrolment[]; done: boolean }> {
+    const all = await this.listCourseEnrolments(courseId);
+    const rows = all.slice(offset, offset + limit);
+    return { rows, done: offset + limit >= all.length };
+  }
+
   async getProfiles(userIds: number[]): Promise<Map<number, Record<string, string>>> {
     const want = new Set(userIds);
     return new Map(this.people.filter((p) => want.has(p.userId)).map((p) => [p.userId, p.profile]));

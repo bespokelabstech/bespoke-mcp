@@ -74,6 +74,21 @@ describe("MoodleClient", () => {
     expect(h.calls).toHaveLength(1);
   });
 
+  it("labels a timeout while reading the body as a timeout, not bad data", async () => {
+    const impl = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
+      },
+    })) as unknown as typeof fetch;
+    const err = await client(impl)
+      .call("f", {}, enrolledUsersSchema)
+      .catch((e) => e);
+    expect(err.code).toBe("upstream_unavailable");
+    expect(err.message).toMatch(/did not respond in time/);
+  });
+
   it("rejects unexpected shapes", async () => {
     const f = fakeFetch([{ body: { not: "an array" } }]);
     await expect(client(f.impl).call("f", {}, enrolledUsersSchema)).rejects.toMatchObject({

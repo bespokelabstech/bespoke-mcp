@@ -1,6 +1,6 @@
 # Metric definitions
 
-`definitions_version: 2026-11-mvp2` (returned in every response). Any change in meaning must
+`definitions_version: 2026-11-mvp3` (returned in every response). Any change in meaning must
 update this file and bump `DEFINITIONS_VERSION` in `src/domain/envelope.ts`.
 
 Everything is pulled live from Moodle's standard web services; nothing is stored. Items
@@ -16,9 +16,9 @@ aggregate (`population`), in the same unit as the answer (people or enrolments).
 | **excluded** · reason `role`  | Not a `student` in the course, or holds `redemptionmanager`                                                                                                                                                                                                                              | No                  |
 | **excluded** · reason `test`  | Username on the exclusion list / range (staging: UAT pool `111111111119`–`111111111169`)                                                                                                                                                                                                 | No                  |
 | **excluded** · reason `staff` | Dealer Level is `PC Center of Excellence` (sampled: every staff row, incl. 4-digit employee numbers)                                                                                                                                                                                     | No                  |
-| **excluded** · reason `dummy` | Conso ID matches a placeholder pattern: one digit repeated (`111111111111`), a 2–3-digit block repeated (`123123123123`), the `1111111111xx` test series (`111111111112`)                                                                                                                | No                  |
+| **excluded** · reason `dummy` | Conso ID matches a placeholder pattern: one digit repeated at any length (`0`, `000`, `00000`, `111111111111`), a 2–3-digit block repeated (`123123123123`), the `1111111111xx` test series (`111111111112`)                                                                             | No                  |
 | **dealer**                    | Conso ID — from `dealer_conso_id`, else the username — is 12 lower-case letters/digits after trimming, lower-casing and repairing a dropped leading zero (11 digits → 12). Covers canonical `BBBB` + 8 digits (BBBB = branch code) and PC alphanumeric forms (`500000j…`, `0032000il…`). | **Yes**             |
-| **legacy**                    | Anything else: no Conso ID, or an old/malformed format (`fb 007700901`, `nl_0999_0007`, `glp_00099`, 9-digit)                                                                                                                                                                            | No                  |
+| **legacy**                    | Anything else: no Conso ID, or an old/malformed format (`fb 007700901`, `nl_0999_0007`, `glp_00099`, 9-digit, and the 10-character "branch + 6 digits" format — business decision 2026-11-04)                                                                                            | No                  |
 
 - **Dealers are counted once per Conso ID**: duplicate accounts (seen on staging, e.g. the
   same ID with and without the leading zero) merge. Legacy/excluded count per account.
@@ -44,13 +44,13 @@ Filters match case-insensitively and exactly; Branch filters match the label, na
 
 ## Engagement signals
 
-| Signal                       | Definition                                                                       | Sees mobile app?                                                 | Cost                                     |
-| ---------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------- |
-| `started` (default)          | Completed at least one activity (course progress > 0%) or completed the course   | **Yes** — verified: an app PDF completion moved progress 0 → 25% | 1 call / person; ≤ 300 people per answer |
-| `completion`                 | `completed` and `progress %` over enrolments in courses with completion tracking | Yes                                                              | 1 call / person                          |
-| `site_last_access` (default) | Last access to the site, incl. app logins; not per course                        | Yes **[verify]**                                                 | cheap                                    |
-| `web_course_access`          | Last time the course was opened in a web browser                                 | **No** — verified: opening a course in the app leaves it empty   | cheap                                    |
-| `avg_score`                  | Mean of graded quiz results (grade / max × 100) over graded quiz items           | Yes                                                              | 1 call / course                          |
+| Signal                       | Definition                                                                       | Sees mobile app?                                                 | Cost                                              |
+| ---------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------- |
+| `started` (default)          | Completed at least one activity (course progress > 0%) or completed the course   | **Yes** — verified: an app PDF completion moved progress 0 → 25% | 1 call / person; > 300 people → answered in parts |
+| `completion`                 | `completed` and `progress %` over enrolments in courses with completion tracking | Yes                                                              | 1 call / person                                   |
+| `site_last_access` (default) | Last access to the site, incl. app logins; not per course                        | Yes **[verify]**                                                 | cheap                                             |
+| `web_course_access`          | Last time the course was opened in a web browser                                 | **No** — verified: opening a course in the app leaves it empty   | cheap                                             |
+| `avg_score`                  | Mean of graded quiz results (grade / max × 100) over graded quiz items           | Yes                                                              | 1 call / course                                   |
 
 Limits of `started`: opening a course or partly viewing an activity without completing it
 does not count; progress has no date, so `started` cannot be windowed.
@@ -78,7 +78,7 @@ Rates are `n / d × 100`, 1 decimal, `null` when the denominator is 0.
 
 - `people` (default): each Dealer once per group. Access = most recent across in-scope
   courses and duplicate accounts; started = started ANY in-scope course.
-- `enrolments`: each Dealer–course pair once. Grouping by course always counts enrolments.
+- `enrolments`: each account × course enrolment as Moodle records it (a Dealer with two accounts in a course counts twice — duplicates merge only in `people`). This keeps enrolment answers additive, so answers in parts equal a single pass. Grouping by course always counts enrolments.
 - Completion and score are always enrolment-based.
 
 ### Time windows (timezone Asia/Manila)
@@ -94,15 +94,19 @@ again later. Exact history needs the activity log (read-only plugin, see ROADMAP
 
 ## Answer size and parts
 
-- Per-person signals (`started`, `completion`) are fetched only when the scope has
-  ≤ `maxPeopleForPersonSignals` (300) accounts; otherwise they are skipped with a warning
-  suggesting a narrower question.
-- Enrolment-level questions without per-person signals are answered **in parts** when they
-  do not fit one call: the response carries `complete: false` and a signed `next_cursor`
-  (holding progress and running totals — the server stores nothing). Per-course rows of each
-  part are final; totals and population come with the last part.
-- People-level questions across many courses must fit one call; otherwise the server
-  suggests narrowing or switching to `count_by: "enrolments"`.
+Questions that do not fit one call (≈50 s) are answered **in parts**: the response carries
+`complete: false`, `progress` and a signed `next_cursor` (running sums and position — the
+server stores nothing). Claude calls again with the same arguments plus the cursor.
+
+| Question type                                                                         | Work unit per part                                                       | Rows per part                                                                                    |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| Enrolment-level, cheap signals (`site_last_access`, `web_course_access`, `avg_score`) | one page (500 enrolments) of one course — large courses split mid-course | grouped by course: rows for courses finished in that part; otherwise all rows with the last part |
+| Per-person signals (`started`, `completion`) over more than 300 people                | a batch of people (all their courses in one LMS call each)               | all rows with the last part                                                                      |
+| People-level counts without per-person signals                                        | must fit one call                                                        | —                                                                                                |
+
+`skipped_signals` lists any requested signal that could not be computed (e.g. `avg_score`
+without the grade report function). Final numbers from parts equal a single-pass answer
+(tested). Each part re-reads live data, so changes made in Moodle between parts can show up.
 
 ## Source map
 

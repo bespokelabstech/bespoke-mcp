@@ -85,6 +85,12 @@ export interface LearningDataPort {
   listCourses(): Promise<Course[]>;
   /** Active enrolments only, without profile fields. */
   listCourseEnrolments(courseId: number): Promise<Enrolment[]>;
+  /** One page of active enrolments (stable order), for work split across calls. */
+  listCourseEnrolmentsPage(
+    courseId: number,
+    offset: number,
+    limit: number,
+  ): Promise<{ rows: Enrolment[]; done: boolean }>;
   /** Custom profile fields (shortname -> raw value) for these users. Users not visible are omitted. */
   getProfiles(userIds: number[]): Promise<Map<number, Record<string, string>>>;
   findPersonByUsername(username: string): Promise<PersonRecord | null>;

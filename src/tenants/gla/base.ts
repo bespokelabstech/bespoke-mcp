@@ -44,7 +44,7 @@ export const glaBase: TenantConfigInput = {
       // Sampled: every staff row (4-digit employee numbers, "pc…" ids) carries this level.
       staffLevels: ["PC Center of Excellence"],
       dummyIdentifierPatterns: [
-        "^(\\d)\\1{11}$", // one digit repeated: 111111111111, 000000000000
+        "^(\\d)\\1*$", // one digit repeated, any length: 0, 000, 00000, 111111111111
         // short block repeated to fill the id: 123123123123, 121212121212. Blocks of 4+ are NOT
         // matched: canonical ids are branch(4) + sequence, e.g. 0001 0001 0001 could be real.
         "^(\\d{2,3})\\1+$",

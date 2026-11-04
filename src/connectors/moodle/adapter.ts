@@ -100,36 +100,48 @@ export class MoodleLearningAdapter implements LearningDataPort {
     return this.cache.getOrLoad(`enrolments:${courseId}`, async () => {
       const out: Enrolment[] = [];
       for (let from = 0; ; from += this.opts.pageSize) {
-        const page = await this.client.call(
-          "core_enrol_get_enrolled_users",
-          {
-            courseid: courseId,
-            options: [
-              { name: "onlyactive", value: 1 },
-              { name: "userfields", value: ENROLMENT_FIELDS },
-              { name: "limitfrom", value: from },
-              { name: "limitnumber", value: this.opts.pageSize },
-              { name: "sortby", value: "id" },
-            ],
-          },
-          enrolledUsersSchema,
-        );
-        for (const u of page) {
-          out.push({
-            userId: u.id,
-            username: u.username ?? "",
-            firstName: text(u.firstname),
-            lastName: text(u.lastname),
-            courseRoles: (u.roles ?? []).map((r) => r.shortname),
-            lastCourseAccess: positiveOrNull(u.lastcourseaccess),
-            lastSiteAccess: positiveOrNull(u.lastaccess),
-          });
-          // Profiles may arrive with the enrolment on older call shapes; reuse them if so.
-          if (u.customfields) this.cache.set(`profile:${u.id}`, Promise.resolve(profileMap(u.customfields)));
-        }
-        if (page.length < this.opts.pageSize) break;
+        const page = await this.listCourseEnrolmentsPage(courseId, from, this.opts.pageSize);
+        out.push(...page.rows);
+        if (page.done) break;
       }
       return out;
+    });
+  }
+
+  listCourseEnrolmentsPage(
+    courseId: number,
+    offset: number,
+    limit: number,
+  ): Promise<{ rows: Enrolment[]; done: boolean }> {
+    return this.cache.getOrLoad(`enrolments:${courseId}:${offset}:${limit}`, async () => {
+      const page = await this.client.call(
+        "core_enrol_get_enrolled_users",
+        {
+          courseid: courseId,
+          options: [
+            { name: "onlyactive", value: 1 },
+            { name: "userfields", value: ENROLMENT_FIELDS },
+            { name: "limitfrom", value: offset },
+            { name: "limitnumber", value: limit },
+            { name: "sortby", value: "id" },
+          ],
+        },
+        enrolledUsersSchema,
+      );
+      const rows = page.map((u) => {
+        // Profiles may arrive with the enrolment on older call shapes; reuse them if so.
+        if (u.customfields) this.cache.set(`profile:${u.id}`, Promise.resolve(profileMap(u.customfields)));
+        return {
+          userId: u.id,
+          username: u.username ?? "",
+          firstName: text(u.firstname),
+          lastName: text(u.lastname),
+          courseRoles: (u.roles ?? []).map((r) => r.shortname),
+          lastCourseAccess: positiveOrNull(u.lastcourseaccess),
+          lastSiteAccess: positiveOrNull(u.lastaccess),
+        };
+      });
+      return { rows, done: page.length < limit };
     });
   }
 

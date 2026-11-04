@@ -2,6 +2,7 @@ import type { PersonCourse } from "@/ports/learning";
 import type { DimensionId } from "@/tenants/schema";
 import { dimensionValue } from "./people";
 import type { EnrolmentRecord } from "./population";
+import { enrolmentKey } from "./population";
 import type { SignalId } from "./signals";
 import type { AccessWindow } from "./time";
 import { inWindow } from "./time";
@@ -72,11 +73,11 @@ const empty = (group: GroupKey): PartialRow => ({
 
 /**
  * Unit of counting:
- *  - "enrolments": each (person, course) pair once. Duplicate accounts of the same person in
- *    one course merge (key = identifier).
- *  - "people": each person once per group; access = most recent across in-scope courses,
- *    started = started ANY in-scope course.
- * Grouping by course always counts per (person, course).
+ *  - "enrolments": each account × course enrolment, as Moodle records it. Additive across
+ *    courses and pages, so it can be answered in parts with results identical to one pass.
+ *  - "people": each person once per group — duplicate accounts with the same identifier merge;
+ *    access = most recent across in-scope courses and accounts, started = started ANY course.
+ * Grouping by course always counts enrolments.
  * Completion and score are always enrolment-based.
  */
 export function aggregate(records: EnrolmentRecord[], opts: AggregateInput): PartialRow[] {
@@ -107,7 +108,7 @@ export function aggregate(records: EnrolmentRecord[], opts: AggregateInput): Par
       g = { group, units: new Map(), enrols: new Map() };
       groups.set(gk, g);
     }
-    const enrolKey = `${r.person.key}:${r.course.id}`;
+    const enrolKey = unit === "people" ? `${r.person.key}:${r.course.id}` : enrolmentKey(r);
     const pc = opts.personCourses?.get(r.person.userId)?.get(r.course.id) ?? null;
     const started = opts.personCourses
       ? pc

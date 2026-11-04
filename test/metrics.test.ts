@@ -61,9 +61,9 @@ describe("aggregate", () => {
     expect(vis.web_ever).toBe(1);
   });
 
-  it("enrolments: each dealer-course pair once (duplicates within a course merge)", () => {
+  it("enrolments: each account-course enrolment as Moodle records it (additive across parts)", () => {
     const [tot] = aggregate(records, { ...base, groupBy: [], unit: "enrolments" });
-    expect(tot!.enrolled).toBe(5); // A×course1, A×course2, b×1, b×2, c×1
+    expect(tot!.enrolled).toBe(6); // a1×1, a2×1, a1×2, b×1, b×2, c×1 — duplicates merge only in "people"
   });
 
   it("started = progress > 0 or completed; completion and score are enrolment-based", () => {

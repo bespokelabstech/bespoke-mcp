@@ -59,7 +59,9 @@ export function registerDescribeCapabilities(server: McpServer, deps: ToolDeps):
           limits: {
             max_courses_per_request: t.limits.maxCoursesPerRequest,
             max_people_for_per_person_signals: t.limits.maxPeopleForPersonSignals,
-            answers_in_parts: "Enrolment-level queries without per-person signals continue via next_cursor.",
+            answers_in_parts:
+              "Large questions continue via next_cursor: enrolment-level ones page through courses (even mid-course); " +
+              "per-person signals over more than max_people_for_per_person_signals people run in batches of people.",
           },
           notes: [
             `Profile values are reported exactly as stored; "${t.emptyValueLabel}" = empty. Similar-looking values (e.g. "Visayas" and "Visayas 1") are separate values.`,

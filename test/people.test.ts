@@ -35,7 +35,8 @@ describe("identity status (sampled staging patterns)", () => {
   });
 
   it("tags old/malformed formats and missing IDs as legacy", () => {
-    for (const id of ["fb 007700901", "nl_0999_0007", "glp_00099", "077700000", ""]) {
+    // incl. the 10-char "branch + 6 digits" format: old format → legacy (business decision)
+    for (const id of ["fb 007700901", "nl_0999_0007", "glp_00099", "077700000", "0777001474", "13182", ""]) {
       expect(status({ userId: 1, username: "legacy.user", profile: { dealer_conso_id: id } })).toBe("legacy");
     }
   });
@@ -47,7 +48,16 @@ describe("identity status (sampled staging patterns)", () => {
     expect(
       status({ userId: 1, profile: { dealer_conso_id: "099900tn0999", level: "pc center of excellence" } }),
     ).toBe("excluded:staff");
-    for (const id of ["111111111111", "000000000000", "123123123123", "121212121212", "111111111112"]) {
+    for (const id of [
+      "111111111111",
+      "000000000000",
+      "123123123123",
+      "121212121212",
+      "111111111112",
+      "0",
+      "000",
+      "00000",
+    ]) {
       expect(status({ userId: 1, username: "x.y", profile: { dealer_conso_id: id } })).toBe("excluded:dummy");
     }
     expect(
