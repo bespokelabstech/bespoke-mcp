@@ -8,7 +8,7 @@ import type { ToolDeps } from "@/tools/runtime";
 import type { TenantConfig } from "@/tenants/schema";
 import type { RuntimeConfig } from "./env";
 
-export const SERVER_INFO = { name: "bespoke-mcp", version: "0.3.0" };
+export const SERVER_INFO = { name: "bespoke-mcp", version: "0.3.1" };
 
 /** Build the learning port selected by the runtime config. One instance per server instance. */
 export function buildLearningPort(cfg: RuntimeConfig): LearningDataPort | null {

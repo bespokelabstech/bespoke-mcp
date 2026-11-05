@@ -70,6 +70,7 @@ export function normaliseIdentifier(raw: string, tenant: TenantConfig): { value:
 }
 
 interface Compiled {
+  placeholders: Set<string>;
   valid: RegExp;
   dummies: RegExp[];
   staff: Set<string>;
@@ -79,6 +80,7 @@ function rules(t: TenantConfig): Compiled {
   let c = compiled.get(t);
   if (!c) {
     c = {
+      placeholders: new Set(t.placeholderValues.map((x) => x.trim().toLowerCase())),
       valid: new RegExp(t.identity.validPattern),
       dummies: t.eligibility.exclude.dummyIdentifierPatterns.map((p) => new RegExp(p)),
       staff: new Set(t.eligibility.exclude.staffLevels.map((l) => l.trim().toLowerCase())),
@@ -102,18 +104,23 @@ export function classify(a: AccountInput, tenant: TenantConfig): PersonView {
   const ex = tenant.eligibility.exclude;
   const d = tenant.dimensions;
   const empty = tenant.emptyValueLabel;
-  const val = (shortname: string) => a.profile[shortname]?.trim() || empty;
+  // Placeholder text typed into a field ("n/a", "none", …) counts as empty everywhere.
+  const raw = (shortname: string) => {
+    const v = a.profile[shortname]?.trim() ?? "";
+    return r.placeholders.has(v.toLowerCase()) ? "" : v;
+  };
+  const val = (shortname: string) => raw(shortname) || empty;
   const base = {
     userId: a.userId,
     name: `${a.firstName} ${a.lastName}`.trim(),
     region: val(d.region.profileField),
     level: val(d.level.profileField),
-    branch: parseBranch(a.profile[d.branch.profileField] ?? "", d.branch.format, empty),
+    branch: parseBranch(raw(d.branch.profileField), d.branch.format, empty),
   };
 
   // Candidate identifiers: profile field first, then the username.
-  const candidates = [a.profile[tenant.identity.profileField] ?? "", a.username]
-    .filter((v) => v.trim() !== "")
+  const candidates = [raw(tenant.identity.profileField), a.username]
+    .filter((v) => v.trim() !== "" && !r.placeholders.has(v.trim().toLowerCase()))
     .map((v) => normaliseIdentifier(v, tenant));
   const valid = candidates.find((c) => r.valid.test(c.value));
   const shown = valid ?? candidates[0] ?? null;

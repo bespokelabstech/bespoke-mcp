@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { buildEnvelope } from "@/domain/envelope";
 import { dimensionValue, familyNotes } from "@/domain/people";
-import { loadScope, selectPopulation, statusCounts } from "@/domain/population";
+import { loadScope, mergedDuplicateAccounts, selectPopulation, statusCounts } from "@/domain/population";
 import { resolveCourseScope } from "@/domain/scope";
 import type { ToolDeps } from "./runtime";
 import { READ_ONLY_ANNOTATIONS, requireLearning, runTool } from "./runtime";
@@ -76,7 +76,7 @@ export function registerListDimensionValues(server: McpServer, deps: ToolDeps): 
           data: {
             dimension: args.dimension,
             label: d[args.dimension].label,
-            population: labelledCounts(pop, t),
+            population: labelledCounts(pop, t, mergedDuplicateAccounts(records)),
             total_people: people.size,
             distinct_values: values.length,
             values: values.slice(0, args.limit).map((x) =>

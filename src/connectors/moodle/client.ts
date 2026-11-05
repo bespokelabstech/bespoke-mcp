@@ -70,6 +70,17 @@ export class MoodleClient {
     const ctx = requestContext.get();
     const remaining = ctx ? ctx.deadline - Date.now() : this.opts.timeoutMs;
     const timeout = Math.max(1000, Math.min(this.opts.timeoutMs, remaining));
+    // When the request's own budget (not the LMS) is what limits this call, a timeout means
+    // "this question ran out of time" (scope_too_large), not "the LMS is down".
+    const budgetLimited = timeout < this.opts.timeoutMs;
+    const timedOut = (cause: string, phase: string) =>
+      budgetLimited
+        ? new AppError("scope_too_large", "This request ran out of time.", { wsfunction, cause, phase })
+        : new AppError("upstream_unavailable", "The LMS did not respond in time. Try again shortly.", {
+            wsfunction,
+            cause,
+            phase,
+          });
     const started = Date.now();
     let res: Response;
     try {
@@ -81,9 +92,11 @@ export class MoodleClient {
         cache: "no-store",
       });
     } catch (err) {
-      throw new AppError("upstream_unavailable", "The LMS did not respond in time. Try again shortly.", {
+      const name = err instanceof Error ? err.name : "unknown";
+      if (name === "TimeoutError" || name === "AbortError") throw timedOut(name, "connect");
+      throw new AppError("upstream_unavailable", "The LMS could not be reached. Try again shortly.", {
         wsfunction,
-        cause: err instanceof Error ? err.name : "unknown",
+        cause: name,
       });
     } finally {
       const ms = Date.now() - started;
@@ -110,11 +123,7 @@ export class MoodleClient {
     } catch (err) {
       // The timeout also covers reading the body: an abort mid-download is a timeout, not bad data.
       if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-        throw new AppError("upstream_unavailable", "The LMS did not respond in time. Try again shortly.", {
-          wsfunction,
-          cause: err.name,
-          phase: "body",
-        });
+        throw timedOut(err.name, "body");
       }
       throw new AppError("upstream_schema", "The LMS returned an unreadable response.", { wsfunction });
     }

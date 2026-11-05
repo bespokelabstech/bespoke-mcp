@@ -44,6 +44,8 @@ export const tenantConfigSchema = z.object({
 
   /** Value shown when a profile attribute is empty. */
   emptyValueLabel: z.string().default("N/A"),
+  /** Placeholder text typed into a profile field that means "none" (case-insensitive) — treated as empty. */
+  placeholderValues: z.array(z.string()).default(["n/a", "na", "none", "null", "nil", "-"]),
 
   /** Business dimensions, keyed by a stable dimension id used in tool inputs. */
   dimensions: z.object({

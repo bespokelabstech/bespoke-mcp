@@ -32,3 +32,12 @@ export function toAppError(err: unknown): AppError {
     error_name: err instanceof Error ? err.name : typeof err,
   });
 }
+
+/**
+ * True when a tool call should stop and hand back what it finished: the request's time budget
+ * ran out (scope_too_large), or the LMS stalled on one call after progress was made
+ * (upstream_unavailable). Callers decide what "progress" means.
+ */
+export function isOutOfTime(err: unknown): boolean {
+  return err instanceof AppError && (err.code === "scope_too_large" || err.code === "upstream_unavailable");
+}

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.1 — 2026-11-05
+
+- `list_people` `sort: "enrolment_order"` + `cursor`: browse very large courses page by page
+  (reads only the pages needed); the whole-course mode now suggests it when a course is too
+  large instead of timing out (the largest staging course took 49 s of the 50 s budget).
+- `population.dealer_duplicate_accounts_merged` explains accounts vs people differences.
+- Placeholder text (`n/a`, `none`, …) in the Conso ID, Region, Dealer Level or Branch is treated
+  as empty (`placeholderValues`).
+- Moodle calls cut short by the request's own time budget report `scope_too_large` ("ran out of
+  time"); only LMS-side slowness or outages report `upstream_unavailable`. `list_people` no longer
+  calls an outage "too large".
+- `enrolment_order` browsing continues (empty page + cursor) when matches are rare, adds region
+  look-alike notes, and rejects `offset`; the sorted modes reject `cursor`.
+
 ## 0.3.0 — 2026-11-04
 
 After the first live checks on staging (definitions `2026-11-mvp3`):
