@@ -10,7 +10,13 @@ import type { AggregateInput, GroupDim, GroupKey, PartialRow, Unit } from "@/dom
 import { aggregate, emptyPartial, finalize, mergePartials, NUMERIC_FIELDS, sortRows } from "@/domain/metrics";
 import { familyNotes } from "@/domain/people";
 import type { EnrolmentRecord, StatusCounts } from "@/domain/population";
-import { loadScope, loadScopePage, selectPopulation, statusCounts } from "@/domain/population";
+import {
+  loadScope,
+  loadScopePage,
+  mergedDuplicateAccounts,
+  selectPopulation,
+  statusCounts,
+} from "@/domain/population";
 import { resolveCourseScope } from "@/domain/scope";
 import type { SignalId } from "@/domain/signals";
 import { DEFAULT_SIGNALS, SIGNALS } from "@/domain/signals";
@@ -196,7 +202,7 @@ const isOutOfTime = (err: unknown) =>
 async function runSingle(c: RunCtx) {
   if (c.args.cursor)
     throw new AppError("invalid_input", "This query is answered in one part; remove the cursor.");
-  const { observed, pop, selected } = await loadWholeScope(c);
+  const { observed, pop, selected, merged } = await loadWholeScope(c);
   const scores = await maybeScores(c, c.courses);
   const opts: Omit<AggregateInput, "groupBy"> = {
     unit: c.unit,
@@ -207,7 +213,7 @@ async function runSingle(c: RunCtx) {
   const rows = sortRows(aggregate(selected, { ...opts, groupBy: c.groupBy }));
   const tot = aggregate(selected, { ...opts, groupBy: [] })[0] ?? emptyPartial();
   notes(c, selected, observed);
-  return finalAnswer(c, rows, tot, pop);
+  return finalAnswer(c, rows, tot, pop, merged);
 }
 
 async function loadWholeScope(c: RunCtx) {
@@ -227,7 +233,8 @@ async function loadWholeScope(c: RunCtx) {
   }
   const pop = statusCounts(scope.records, c.unit);
   const selected = selectPopulation(scope.records, c.statuses);
-  return { observed: scope.observedRegions, pop, selected };
+  const merged = c.unit === "people" ? mergedDuplicateAccounts(scope.records) : 0;
+  return { observed: scope.observedRegions, pop, selected, merged };
 }
 
 // ---------------------------------------------------------------- people
@@ -238,7 +245,7 @@ async function loadWholeScope(c: RunCtx) {
  * between parts never shift the position. Duplicate accounts share a key and stay together.
  */
 async function runPeople(c: RunCtx, prev: PeopleState | undefined) {
-  const { observed, pop, selected } = await loadWholeScope(c);
+  const { observed, pop, selected, merged } = await loadWholeScope(c);
   const byKey = new Map<string, EnrolmentRecord[]>();
   for (const r of selected) {
     const list = byKey.get(r.person.key);
@@ -288,7 +295,7 @@ async function runPeople(c: RunCtx, prev: PeopleState | undefined) {
   }
   notes(c, selected, observed);
   const progress = { people_done: idx, people_total: keys.length };
-  if (idx >= keys.length) return { ...finalAnswer(c, sortRows(state.acc), state.tot, pop), progress };
+  if (idx >= keys.length) return { ...finalAnswer(c, sortRows(state.acc), state.tot, pop, merged), progress };
   c.warnings.push(
     `Partial answer: ${idx} of ${keys.length} ${c.t.vocabulary.personPlural.toLowerCase()} processed. ` +
       "Call query_metrics again with the same arguments and next_cursor.",
@@ -484,12 +491,12 @@ function unpackRow(c: RunCtx, p: Packed, dims: GroupDim[] = c.groupBy): PartialR
 const packRows = (c: RunCtx, rows: PartialRow[]) => rows.map((r) => packRow(c, r));
 const unpackRows = (c: RunCtx, rows: Packed[]) => rows.map((r) => unpackRow(c, r));
 
-function finalAnswer(c: RunCtx, rows: PartialRow[], tot: PartialRow, pop: StatusCounts) {
+function finalAnswer(c: RunCtx, rows: PartialRow[], tot: PartialRow, pop: StatusCounts, merged = 0) {
   return {
     unit: c.unit,
     complete: true,
     next_cursor: null,
-    population: labelledCounts(pop, c.t),
+    population: labelledCounts(pop, c.t, merged),
     totals: finalize(tot, c.signals, c.window !== null, false),
     rows_total: rows.length,
     rows: rows.slice(0, c.args.limit).map((r) => finalize(r, c.signals, c.window !== null)),

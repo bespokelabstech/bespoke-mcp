@@ -112,8 +112,9 @@ export function classify(a: AccountInput, tenant: TenantConfig): PersonView {
   };
 
   // Candidate identifiers: profile field first, then the username.
+  const emptyValues = new Set(tenant.identity.emptyValues.map((x) => x.toLowerCase()));
   const candidates = [a.profile[tenant.identity.profileField] ?? "", a.username]
-    .filter((v) => v.trim() !== "")
+    .filter((v) => v.trim() !== "" && !emptyValues.has(v.trim().toLowerCase()))
     .map((v) => normaliseIdentifier(v, tenant));
   const valid = candidates.find((c) => r.valid.test(c.value));
   const shown = valid ?? candidates[0] ?? null;

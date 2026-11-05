@@ -352,6 +352,91 @@ describe("answers in parts (stateless cursor)", () => {
   }, 60_000);
 });
 
+describe("list_people paging and population details", () => {
+  async function handlerWith(limits: Partial<TenantConfig["limits"]>, tweak?: (p: Fixture) => void) {
+    const { buildMcpHandler } = await import("@/core/server");
+    const { loadTenant } = await import("@/tenants/registry");
+    const { FixtureLearningAdapter } = await import("@/connectors/fixture/adapter");
+    const tenant = loadTenant("gla", "staging");
+    const port = new FixtureLearningAdapter({ nowSec: Math.floor(Date.now() / 1000) });
+    tweak?.(port);
+    const h = buildMcpHandler(
+      {
+        tenant: { ...tenant, limits: { ...tenant.limits, ...limits } },
+        env: "staging",
+        accessKeys: [KEY],
+        dataSource: { kind: "none" },
+      },
+      port,
+    );
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const body = await rpcBody(await h(rpc("tools/call", { name, arguments: args })));
+      return JSON.parse((body.result as { content: Array<{ text: string }> }).content[0]!.text);
+    };
+    return { port, call };
+  }
+
+  it("enrolment_order browses page by page and returns the same people as the sorted list", async () => {
+    const { call } = await handlerWith({ participantsPageSize: 50 });
+    const sortedNames: string[] = [];
+    for (let offset: number | null = 0; offset !== null;) {
+      const pg = await call("list_people", {
+        course_id: 10,
+        limit: 100,
+        offset,
+        population: ["dealer", "legacy"],
+      });
+      sortedNames.push(...pg.data.people.map((p: { name: string }) => p.name));
+      offset = pg.data.next_offset;
+    }
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    let calls = 0;
+    do {
+      const page = await call("list_people", {
+        course_id: 10,
+        sort: "enrolment_order",
+        limit: 30,
+        population: ["dealer", "legacy"],
+        ...(cursor ? { cursor } : {}),
+      });
+      expect(page.data.people.length).toBeLessThanOrEqual(30);
+      ids.push(...page.data.people.map((p: { name: string }) => p.name));
+      cursor = page.data.next_cursor ?? undefined;
+    } while (cursor && ++calls < 20);
+    expect(new Set(ids).size).toBe(ids.length); // no repeats across pages
+    expect(ids.sort()).toEqual(sortedNames.sort());
+  });
+
+  it("rejects enrolment_order with search, and points to it when a course is too large", async () => {
+    const { call } = await handlerWith({});
+    const bad = await call("list_people", { course_id: 10, sort: "enrolment_order", search: "deal" });
+    expect(bad.error.code).toBe("invalid_input");
+    const { AppError } = await import("@/core/errors");
+    const slow = await handlerWith({}, (p) => {
+      p.getProfiles = async () => {
+        throw new AppError("upstream_unavailable", "slow");
+      };
+    });
+    const tooBig = await slow.call("list_people", { course_id: 10 });
+    expect(tooBig.error.code).toBe("scope_too_large");
+    expect(tooBig.error.message).toMatch(/enrolment_order/);
+  });
+
+  it("reports merged duplicate accounts when a Dealer has two accounts in scope", async () => {
+    const { port, call } = await handlerWith({});
+    const { EDGE } = await import("@/connectors/fixture/adapter");
+    // make sure both the original account and its duplicate are enrolled in course 10
+    port.access.get(10)!.set(1000, null);
+    port.access.get(10)!.set(EDGE.dupDropped0, null);
+    const res = await call("query_metrics", { course_ids: [10], signals: ["site_last_access"] });
+    expect(res.data.population.dealer_duplicate_accounts_merged).toBe(1);
+    const list = await call("list_people", { course_id: 10, limit: 1 });
+    expect(list.data.population.dealer_duplicate_accounts_merged).toBe(1);
+    expect(list.data.matched_accounts - list.data.matched_people).toBe(1);
+  });
+});
+
 describe("misconfiguration", () => {
   it("fails closed with 500 when the access key is missing", async () => {
     const { POST } = await loadRoute({ MCP_TENANT: "gla", MCP_ENV: "staging" });

@@ -127,3 +127,12 @@ export function selectPopulation(records: EnrolmentRecord[], statuses: readonly 
 export function enrolmentKey(r: EnrolmentRecord): string {
   return `u:${r.person.userId}:${r.course.id}`;
 }
+
+/**
+ * Accounts merged into another account of the same person (same identifier) — the
+ * difference between counted accounts and counted people. Shown so totals are explainable.
+ */
+export function mergedDuplicateAccounts(records: EnrolmentRecord[]): number {
+  const people = records.filter((r) => r.person.status === "person");
+  return new Set(people.map((r) => r.person.userId)).size - new Set(people.map((r) => r.person.key)).size;
+}

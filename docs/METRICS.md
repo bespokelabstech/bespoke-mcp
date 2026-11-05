@@ -21,7 +21,10 @@ aggregate (`population`), in the same unit as the answer (people or enrolments).
 | **legacy**                    | Anything else: no Conso ID, or an old/malformed format (`fb 007700901`, `nl_0999_0007`, `glp_00099`, 9-digit, and the 10-character "branch + 6 digits" format — business decision 2026-11-04)                                                                                            | No                  |
 
 - **Dealers are counted once per Conso ID**: duplicate accounts (seen on staging, e.g. the
-  same ID with and without the leading zero) merge. Legacy/excluded count per account.
+  same ID with and without the leading zero) merge. Legacy/excluded count per account. When
+  any merged, `population.dealer_duplicate_accounts_merged` says how many accounts merged.
+- Values typed instead of an ID that mean "none" (`n/a`, `na`, `none`, `null`, `nil`, `-`) are
+  treated as empty.
 - Callers can choose the population: `["dealer"]` (default), `["dealer","legacy"]`, `["legacy"]`, …
 - Test accounts with a legitimate ID structure (e.g. `000700099515`) count as Dealers by design.
 - The server never edits identifiers; fixing a profile in Moodle moves the account on the next query.

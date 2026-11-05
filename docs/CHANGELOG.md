@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 — 2026-11-05
+
+- `list_people` `sort: "enrolment_order"` + `cursor`: browse very large courses page by page
+  (reads only the pages needed); the whole-course mode now suggests it when a course is too
+  large instead of timing out (the largest staging course took 49 s of the 50 s budget).
+- `population.dealer_duplicate_accounts_merged` explains accounts vs people differences.
+- Placeholder values typed instead of a Conso ID (`n/a`, `none`, …) are treated as empty.
+
 ## 0.3.0 — 2026-11-04
 
 After the first live checks on staging (definitions `2026-11-mvp3`):

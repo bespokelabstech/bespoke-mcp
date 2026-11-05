@@ -112,6 +112,18 @@ export function statusLabel(s: Status, t: TenantConfig): string {
 }
 
 /** {dealer: n, legacy: n, excluded: n} */
-export function labelledCounts(c: StatusCounts, t: TenantConfig): Record<string, number> {
-  return { [t.vocabulary.personKey]: c.person, legacy: c.legacy, excluded: c.excluded };
+/** {dealer, legacy, excluded} plus, when duplicates merged, dealer_duplicate_accounts_merged. */
+export function labelledCounts(
+  c: StatusCounts,
+  t: TenantConfig,
+  mergedDuplicates = 0,
+): Record<string, number> {
+  return {
+    [t.vocabulary.personKey]: c.person,
+    legacy: c.legacy,
+    excluded: c.excluded,
+    ...(mergedDuplicates > 0
+      ? { [`${t.vocabulary.personKey}_duplicate_accounts_merged`]: mergedDuplicates }
+      : {}),
+  };
 }

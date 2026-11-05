@@ -41,6 +41,16 @@ describe("identity status (sampled staging patterns)", () => {
     }
   });
 
+  it('treats "n/a"-style values as an empty identifier', () => {
+    const v = classify(
+      account({ userId: 1, username: "legacy.user", profile: { dealer_conso_id: "N/A" } }),
+      t,
+    );
+    expect(v.status).toBe("legacy");
+    expect(v.identifier).toBe("legacy.user"); // the placeholder is ignored; the username is shown instead
+    expect(status({ userId: 2, profile: { dealer_conso_id: "n/a" } })).toBe("person"); // falls back to a Conso-shaped username
+  });
+
   it("excludes staff by Dealer Level, dummies by pattern, the UAT pool and non-learner roles", () => {
     expect(
       status({ userId: 1, profile: { dealer_conso_id: "4321", level: "PC Center of Excellence" } }),
