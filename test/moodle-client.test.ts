@@ -89,6 +89,34 @@ describe("MoodleClient", () => {
     expect(err.message).toMatch(/did not respond in time/);
   });
 
+  it("reports a budget-limited timeout as 'ran out of time', an LMS-limited one as unavailable", async () => {
+    const { requestContext, newRequestState } = await import("@/core/request-context");
+    const hang = (async (_u: unknown, init?: RequestInit) =>
+      new Promise((_, reject) =>
+        init?.signal?.addEventListener("abort", () =>
+          reject(Object.assign(new Error("t"), { name: "TimeoutError" })),
+        ),
+      )) as unknown as typeof fetch;
+    const c = new MoodleClient({
+      baseUrl: "https://lms.example",
+      token: SECRET,
+      timeoutMs: 15_000,
+      fetchImpl: hang,
+    });
+    const budget = await requestContext
+      .run(newRequestState(1_200), () => c.call("f", {}, enrolledUsersSchema))
+      .catch((e) => e);
+    expect(budget.code).toBe("scope_too_large");
+    const lms = new MoodleClient({
+      baseUrl: "https://lms.example",
+      token: SECRET,
+      timeoutMs: 1_000,
+      fetchImpl: hang,
+    });
+    const slow = await lms.call("f", {}, enrolledUsersSchema).catch((e) => e);
+    expect(slow.code).toBe("upstream_unavailable");
+  }, 10_000);
+
   it("rejects unexpected shapes", async () => {
     const f = fakeFetch([{ body: { not: "an array" } }]);
     await expect(client(f.impl).call("f", {}, enrolledUsersSchema)).rejects.toMatchObject({

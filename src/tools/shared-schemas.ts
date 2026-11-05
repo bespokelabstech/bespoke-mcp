@@ -111,7 +111,6 @@ export function statusLabel(s: Status, t: TenantConfig): string {
   return s === "person" ? t.vocabulary.personKey : s;
 }
 
-/** {dealer: n, legacy: n, excluded: n} */
 /** {dealer, legacy, excluded} plus, when duplicates merged, dealer_duplicate_accounts_merged. */
 export function labelledCounts(
   c: StatusCounts,

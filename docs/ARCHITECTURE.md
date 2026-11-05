@@ -98,7 +98,9 @@ A future port registers its tools only for tenants that bind it.
   JSON (position + additive partial sums packed as positional arrays; size checked before each
   further unit of work), HMAC-signed with a key derived from the access key
   and bound to a hash of the query. A timeout while reading a Moodle body is reported as a
-  timeout, and a part that runs out of time returns what it finished plus the cursor.
+  timeout, and a part that runs out of time returns what it finished plus the cursor. A Moodle
+  call limited by the remaining request budget reports `scope_too_large`; one limited by
+  `MOODLE_TIMEOUT_MS` reports `upstream_unavailable`.
 - Moodle's fixed reason for course-access failures ("User not fully set-up", "Site policy not
   agreed") is surfaced with a hint; free-text messages are otherwise never forwarded.
 

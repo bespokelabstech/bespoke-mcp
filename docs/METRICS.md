@@ -23,8 +23,9 @@ aggregate (`population`), in the same unit as the answer (people or enrolments).
 - **Dealers are counted once per Conso ID**: duplicate accounts (seen on staging, e.g. the
   same ID with and without the leading zero) merge. Legacy/excluded count per account. When
   any merged, `population.dealer_duplicate_accounts_merged` says how many accounts merged.
-- Values typed instead of an ID that mean "none" (`n/a`, `na`, `none`, `null`, `nil`, `-`) are
-  treated as empty.
+- Placeholder text typed into any profile field (`n/a`, `na`, `none`, `null`, `nil`, `-`,
+  configurable as `placeholderValues`) is treated as empty — for the Conso ID and for Region,
+  Dealer Level and Branch (shown as `N/A`).
 - Callers can choose the population: `["dealer"]` (default), `["dealer","legacy"]`, `["legacy"]`, …
 - Test accounts with a legitimate ID structure (e.g. `000700099515`) count as Dealers by design.
 - The server never edits identifiers; fixing a profile in Moodle moves the account on the next query.

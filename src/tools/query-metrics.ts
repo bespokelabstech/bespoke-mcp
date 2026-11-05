@@ -3,7 +3,7 @@ import { z } from "zod";
 import { assertWithinBudget } from "@/core/concurrency";
 import type { CursorPayload } from "@/core/cursor";
 import { cursorFits, decodeCursor, encodeCursor, queryHash } from "@/core/cursor";
-import { AppError } from "@/core/errors";
+import { AppError, isOutOfTime } from "@/core/errors";
 import { loadPersonCourses, loadScores } from "@/domain/enrich";
 import { buildEnvelope } from "@/domain/envelope";
 import type { AggregateInput, GroupDim, GroupKey, PartialRow, Unit } from "@/domain/metrics";
@@ -193,9 +193,6 @@ interface RunCtx {
   qh: string;
 }
 
-const isOutOfTime = (err: unknown) =>
-  err instanceof AppError && (err.code === "scope_too_large" || err.code === "upstream_unavailable");
-
 // ---------------------------------------------------------------- single
 
 /** People-level counts without per-person signals: the whole scope must load in one call. */
@@ -221,7 +218,7 @@ async function loadWholeScope(c: RunCtx) {
   try {
     scope = await loadScope(c.port, c.t, c.courses, c.args.filters ?? {});
   } catch (err) {
-    if (isOutOfTime(err)) {
+    if (err instanceof AppError && err.code === "scope_too_large") {
       throw new AppError(
         "scope_too_large",
         `Loading every ${c.t.vocabulary.person.toLowerCase()} across ${c.courses.length} ${c.t.vocabulary.coursePlural.toLowerCase()} does not fit one call. ` +

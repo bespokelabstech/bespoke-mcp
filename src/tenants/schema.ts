@@ -44,6 +44,8 @@ export const tenantConfigSchema = z.object({
 
   /** Value shown when a profile attribute is empty. */
   emptyValueLabel: z.string().default("N/A"),
+  /** Placeholder text typed into a profile field that means "none" (case-insensitive) — treated as empty. */
+  placeholderValues: z.array(z.string()).default(["n/a", "na", "none", "null", "nil", "-"]),
 
   /** Business dimensions, keyed by a stable dimension id used in tool inputs. */
   dimensions: z.object({
@@ -57,8 +59,6 @@ export const tenantConfigSchema = z.object({
     label: z.string().min(1),
     /** Profile field holding the identifier; may be empty or malformed on legacy accounts. */
     profileField: z.string().min(1),
-    /** Values typed in place of an identifier that mean "none" (compared case-insensitively). */
-    emptyValues: z.array(z.string()).default(["n/a", "na", "none", "null", "nil", "-"]),
     /** A normalised identifier matching this is structurally valid. */
     validPattern: z.string().min(1),
     /** Numeric identifiers of this length are left-padded with zeros to `padNumericTo`. */

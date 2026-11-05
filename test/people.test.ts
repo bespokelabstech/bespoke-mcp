@@ -41,6 +41,16 @@ describe("identity status (sampled staging patterns)", () => {
     }
   });
 
+  it('treats placeholder text in profile fields as empty ("N/A")', () => {
+    const v = classify(
+      account({ userId: 1, profile: { Region_Dropdown: "n/a", level: "None", branch_code: "-" } }),
+      t,
+    );
+    expect(v.region).toBe("N/A");
+    expect(v.level).toBe("N/A");
+    expect(v.branch.label).toBe("N/A");
+  });
+
   it('treats "n/a"-style values as an empty identifier', () => {
     const v = classify(
       account({ userId: 1, username: "legacy.user", profile: { dealer_conso_id: "N/A" } }),

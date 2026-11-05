@@ -6,7 +6,13 @@
   (reads only the pages needed); the whole-course mode now suggests it when a course is too
   large instead of timing out (the largest staging course took 49 s of the 50 s budget).
 - `population.dealer_duplicate_accounts_merged` explains accounts vs people differences.
-- Placeholder values typed instead of a Conso ID (`n/a`, `none`, …) are treated as empty.
+- Placeholder text (`n/a`, `none`, …) in the Conso ID, Region, Dealer Level or Branch is treated
+  as empty (`placeholderValues`).
+- Moodle calls cut short by the request's own time budget report `scope_too_large` ("ran out of
+  time"); only LMS-side slowness or outages report `upstream_unavailable`. `list_people` no longer
+  calls an outage "too large".
+- `enrolment_order` browsing continues (empty page + cursor) when matches are rare, adds region
+  look-alike notes, and rejects `offset`; the sorted modes reject `cursor`.
 
 ## 0.3.0 — 2026-11-04
 

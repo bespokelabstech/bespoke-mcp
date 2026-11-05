@@ -408,20 +408,65 @@ describe("list_people paging and population details", () => {
     expect(ids.sort()).toEqual(sortedNames.sort());
   });
 
-  it("rejects enrolment_order with search, and points to it when a course is too large", async () => {
+  it("rejects mismatched paging, points to enrolment_order only when out of time, passes outages through", async () => {
     const { call } = await handlerWith({});
-    const bad = await call("list_people", { course_id: 10, sort: "enrolment_order", search: "deal" });
-    expect(bad.error.code).toBe("invalid_input");
+    expect(
+      (await call("list_people", { course_id: 10, sort: "enrolment_order", search: "deal" })).error.code,
+    ).toBe("invalid_input");
+    expect(
+      (await call("list_people", { course_id: 10, sort: "enrolment_order", offset: 50 })).error.code,
+    ).toBe("invalid_input");
+    expect((await call("list_people", { course_id: 10, cursor: "0:5" })).error.code).toBe("invalid_input");
     const { AppError } = await import("@/core/errors");
-    const slow = await handlerWith({}, (p) => {
+    const fail = (code: "scope_too_large" | "upstream_unavailable") => (p: Fixture) => {
       p.getProfiles = async () => {
-        throw new AppError("upstream_unavailable", "slow");
+        throw new AppError(code, "x");
       };
-    });
-    const tooBig = await slow.call("list_people", { course_id: 10 });
+    };
+    const tooBig = await (
+      await handlerWith({}, fail("scope_too_large"))
+    ).call("list_people", { course_id: 10 });
     expect(tooBig.error.code).toBe("scope_too_large");
     expect(tooBig.error.message).toMatch(/enrolment_order/);
+    const outage = await (
+      await handlerWith({}, fail("upstream_unavailable"))
+    ).call("list_people", { course_id: 10 });
+    expect(outage.error.code).toBe("upstream_unavailable");
+    expect(outage.error.message).not.toMatch(/too large/);
   });
+
+  it("enrolment_order keeps going when matches are rare, returning a cursor even with no matches yet", async () => {
+    const { call } = await handlerWith({ participantsPageSize: 50, requestBudgetMs: 5_000 }, (p) => {
+      const orig = p.listCourseEnrolmentsPage.bind(p);
+      p.listCourseEnrolmentsPage = async (...a) => (
+        await new Promise((r) => setTimeout(r, 2_600)),
+        orig(...a)
+      );
+    });
+    // excluded accounts are rare in the fixture and sit at the end of the enrolment order
+    const first = await call("list_people", {
+      course_id: 10,
+      sort: "enrolment_order",
+      population: ["excluded"],
+    });
+    expect(first.error).toBeUndefined();
+    expect(first.data.next_cursor).toMatch(/^\d+:\d+$/);
+    const found: string[] = [...first.data.people.map((p: { status: string }) => p.status)];
+    let cursor = first.data.next_cursor;
+    for (let i = 0; cursor && i < 6; i++) {
+      const page = await call("list_people", {
+        course_id: 10,
+        sort: "enrolment_order",
+        population: ["excluded"],
+        cursor,
+      });
+      found.push(...page.data.people.map((p: { status: string }) => p.status));
+      cursor = page.data.next_cursor;
+    }
+    expect(cursor).toBeNull();
+    expect(found.length).toBeGreaterThan(0);
+    expect(found.every((x) => x === "excluded")).toBe(true);
+  }, 60_000);
 
   it("reports merged duplicate accounts when a Dealer has two accounts in scope", async () => {
     const { port, call } = await handlerWith({});

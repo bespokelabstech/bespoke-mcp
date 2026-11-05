@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { assertWithinBudget } from "@/core/concurrency";
-import { AppError } from "@/core/errors";
+import { AppError, isOutOfTime } from "@/core/errors";
 import { loadPersonCourses } from "@/domain/enrich";
 import { buildEnvelope } from "@/domain/envelope";
 import { familyNotes } from "@/domain/people";
@@ -145,11 +145,18 @@ interface Ctx {
 /** Whole-course listing: exact totals, search, signal filter and sorting. */
 async function sortedList(c: Ctx, warnings: string[]) {
   const { t, course, args } = c;
+  if (args.cursor) {
+    throw new AppError(
+      "invalid_input",
+      'cursor is only for sort "enrolment_order"; use offset with this sort.',
+    );
+  }
   let scope;
   try {
     scope = await loadScope(c.port, t, [course], args.filters ?? {});
   } catch (err) {
-    if (err instanceof AppError && (err.code === "scope_too_large" || err.code === "upstream_unavailable")) {
+    // Only a time-budget overrun means "too large"; a genuine LMS outage passes through unchanged.
+    if (err instanceof AppError && err.code === "scope_too_large") {
       throw new AppError(
         "scope_too_large",
         `This ${t.vocabulary.course.toLowerCase()} is too large to load in one call. Use sort "enrolment_order" to browse it ` +
@@ -234,25 +241,35 @@ async function browse(c: Ctx, warnings: string[]) {
       'sort "enrolment_order" cannot be combined with search or where; use the default sort for those.',
     );
   }
+  if (args.offset > 0) {
+    throw new AppError(
+      "invalid_input",
+      'sort "enrolment_order" pages with cursor (next_cursor), not offset.',
+    );
+  }
   let [off, skip] = (args.cursor ?? "0:0").split(":").map(Number) as [number, number];
   const pageSize = t.limits.participantsPageSize;
   if (off % pageSize !== 0) throw new AppError("invalid_input", "Invalid cursor for this course listing.");
   const out: EnrolmentRecord[] = [];
+  const observed = new Set<string>();
   let next: string | null = null;
+  let scanned = 0;
   for (;;) {
     let page;
     try {
       assertWithinBudget();
       page = await loadScopePage(c.port, t, course, off, args.filters ?? {});
     } catch (err) {
-      const outOfTime =
-        err instanceof AppError && (err.code === "scope_too_large" || err.code === "upstream_unavailable");
-      if (outOfTime && out.length > 0) {
+      // Out of time after reading at least one page: hand back what we have (possibly nothing,
+      // when matches are rare) and a cursor at the page we reached, so the caller can continue.
+      if (isOutOfTime(err) && scanned > 0) {
         next = `${off}:${skip}`;
         break;
       }
       throw err;
     }
+    scanned++;
+    page.observedRegions.forEach((r) => observed.add(r));
     const matches = selectPopulation(page.records, c.statuses).slice(skip);
     const take = matches.slice(0, args.limit - out.length);
     out.push(...take);
@@ -275,8 +292,17 @@ async function browse(c: Ctx, warnings: string[]) {
         out.map((r) => r.person.userId),
       )
     : null;
+  if (args.filters?.region?.length) {
+    warnings.push(...familyNotes(t.dimensions.region.label, [...observed], args.filters.region));
+  }
+  if (next && out.length === 0) {
+    warnings.push(
+      "No matches in the part of the course read so far; call again with next_cursor to keep looking.",
+    );
+  }
   warnings.push(
-    "Browsing in enrolment order: totals are not computed. Use the default sort for population and matched counts.",
+    "Browsing in enrolment order: totals are not computed (use the default sort for population and matched counts). " +
+      "Best effort: if enrolments change while browsing, someone may repeat or be skipped.",
   );
   return { next_cursor: next, people: out.map((r) => row(c, r, progress)) };
 }
