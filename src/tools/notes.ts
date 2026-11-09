@@ -23,11 +23,12 @@ export interface DataFacts {
   n: number;
   noEmail: number;
   noStatus: number;
+  noName: number;
   odd: Partial<Record<DimensionId, string[]>>;
 }
 
 export function emptyFacts(): DataFacts {
-  return { n: 0, noEmail: 0, noStatus: 0, odd: {} };
+  return { n: 0, noEmail: 0, noStatus: 0, noName: 0, odd: {} };
 }
 
 export function dataFacts(t: TenantConfig, persons: Iterable<PersonView>): DataFacts {
@@ -50,6 +51,7 @@ export function dataFacts(t: TenantConfig, persons: Iterable<PersonView>): DataF
     n: list.length,
     noEmail: list.filter((p) => !p.emailKnown).length,
     noStatus: list.filter((p) => !p.statusKnown).length,
+    noName: list.filter((p) => !p.nameKnown).length,
     odd,
   };
 }
@@ -59,7 +61,13 @@ export function mergeFacts(a: DataFacts, b: DataFacts): DataFacts {
   for (const [dim, values] of Object.entries(b.odd) as Array<[DimensionId, string[]]>) {
     odd[dim] = [...new Set([...(odd[dim] ?? []), ...values])];
   }
-  return { n: a.n + b.n, noEmail: a.noEmail + b.noEmail, noStatus: a.noStatus + b.noStatus, odd };
+  return {
+    n: a.n + b.n,
+    noEmail: a.noEmail + b.noEmail,
+    noStatus: a.noStatus + b.noStatus,
+    noName: (a.noName ?? 0) + (b.noName ?? 0),
+    odd,
+  };
 }
 
 export function factWarnings(t: TenantConfig, f: DataFacts): string[] {
@@ -72,6 +80,13 @@ export function factWarnings(t: TenantConfig, f: DataFacts): string[] {
       out.push(
         `Email addresses were not visible for ${f.noEmail === f.n ? "any" : `${f.noEmail} of ${f.n}`} accounts checked, ` +
           `so rule ${email.join(", ")} could not hide them: accounts it should hide may be counted as ${sf.label}.`,
+      );
+    }
+    const name = [...new Set(uses("name"))];
+    if (name.length && f.noName > 0) {
+      out.push(
+        `Names were not returned for ${f.noName === f.n ? "any" : `${f.noName} of ${f.n}`} accounts checked, ` +
+          `so rule(s) ${name.join(", ")} were not applied to them (an unknown name is not treated as blank).`,
       );
     }
     const status = uses("status");

@@ -162,3 +162,14 @@ Moodle adapter — never returned, logged or cached in full. If Moodle hides ema
 service account, rule 1 cannot apply; every answer warns. Patterns for rules 4 and 5 are
 guesses (METRICS lists them). The previous dummy check on the Conso ID profile field and the
 repeated 2–3 digit block pattern are dropped because BES-465 does not have them.
+
+## ADR-013 — Rule 5 reported per part; unknown names are not blank (2026-11-09)
+
+**Decision.** The three parts of BES-465 rule 5 (blank name, "PC SFLMS Live", legacy username
+at the start) keep separate labels, and `population.matched_by_rule` adds overlapping counts
+next to the first-match `not_valid`. A name the LMS did not return skips the name rules and
+raises a warning instead of counting as blank.
+
+**Why.** On staging one Course showed 136 of 778 accounts hidden by rule 5, and one label could
+not say which part (or whether missing data) caused it. The dashboard's single "Placeholder
+name" count equals the sum of the three labels; `not_valid_because` may list more than one part.

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.1 — 2026-11-09
+
+Definitions `2026-11-mvp6` (output keys changed; ADR-013):
+
+- Rule 5 of `valid_dealers` reports each part under its own label ("Placeholder name: blank",
+  "…: PC SFLMS Live", "…: legacy username"). On staging, 136 of 778 accounts in one Course had
+  rule 5 as their first matching rule, and the single label could not say which part.
+- `population.matched_by_rule`: every account each rule matches (overlapping), next to
+  `not_valid` (first matching rule only).
+- A name the LMS did not return is unknown, not blank: name rules skip it, with a warning.
+
 ## 0.5.0 — 2026-11-09
 
 `valid_dealers` follows the updated BES-465 rules (definitions `2026-11-mvp5`, ADR-012):

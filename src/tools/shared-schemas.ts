@@ -172,7 +172,9 @@ export function populationOut(
   return {
     learner_accounts: c.all,
     [key]: c.valid,
-    ...(Object.keys(c.notValid).length ? { not_valid: c.notValid } : {}),
+    // not_valid: by FIRST matching rule (adds up to the hidden total);
+    // matched_by_rule: every account each rule matches (overlapping).
+    ...(Object.keys(c.notValid).length ? { not_valid: c.notValid, matched_by_rule: c.matched } : {}),
     counted: validOnly ? key : "all",
   };
 }

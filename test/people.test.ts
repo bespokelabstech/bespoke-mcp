@@ -89,13 +89,33 @@ describe("valid_dealers saved filter (BES-465 rules, provisional)", () => {
   });
 
   it("5. placeholder names: blank, PC SFLMS Live, or starting with a legacy username", () => {
-    expect(hiddenBy({ userId: 1, firstName: "", lastName: " " })).toEqual(["Placeholder name"]);
-    expect(hiddenBy({ userId: 1, firstName: "PC SFLMS Live", lastName: "3" })).toEqual(["Placeholder name"]);
-    expect(hiddenBy({ userId: 1, firstName: "cl_0106_00003", lastName: "Reyes" })).toEqual([
-      "Placeholder name",
+    expect(hiddenBy({ userId: 1, firstName: "", lastName: " " })).toEqual(["Placeholder name: blank"]);
+    expect(hiddenBy({ userId: 1, firstName: "PC SFLMS Live", lastName: "3" })).toEqual([
+      "Placeholder name: PC SFLMS Live",
     ]);
-    expect(hiddenBy({ userId: 1, firstName: "sl2_0575c_00012", lastName: "" })).toEqual(["Placeholder name"]);
+    expect(hiddenBy({ userId: 1, firstName: "cl_0106_00003", lastName: "Reyes" })).toEqual([
+      "Placeholder name: legacy username",
+    ]);
+    expect(hiddenBy({ userId: 1, firstName: "sl2_0575c_00012", lastName: "" })).toEqual([
+      "Placeholder name: legacy username",
+    ]);
     expect(hiddenBy({ userId: 1, firstName: "Maria", lastName: "cl_0106_00003" })).toEqual([]);
+  });
+
+  it("5. a name the LMS did not return is unknown, not blank", () => {
+    expect(hiddenBy({ userId: 1, firstName: "", lastName: "", nameShown: false })).toEqual([]);
+    expect(view({ userId: 1, firstName: "", lastName: "", nameShown: false }).nameKnown).toBe(false);
+    // other rules still apply
+    expect(
+      hiddenBy({ userId: 1, username: "aimon.test", firstName: "", lastName: "", nameShown: false }),
+    ).toEqual(["Test, training or admin username"]);
+  });
+
+  it("5. one account can match several parts of rule 5; each is listed", () => {
+    expect(hiddenBy({ userId: 1, firstName: "cl_0106_00003", lastName: "PC SFLMS Live" })).toEqual([
+      "Placeholder name: PC SFLMS Live",
+      "Placeholder name: legacy username",
+    ]);
   });
 
   it("6. suspended accounts", () => {

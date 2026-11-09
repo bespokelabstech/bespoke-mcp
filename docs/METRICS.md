@@ -1,6 +1,6 @@
 # Metric definitions
 
-`definitions_version: 2026-11-mvp5` (returned in every response). Any change in meaning must
+`definitions_version: 2026-11-mvp6` (returned in every response). Any change in meaning must
 update this file and bump `DEFINITIONS_VERSION` in `src/domain/envelope.ts`.
 
 Labels, defaults, filters and sort follow **BES-465** (Compliance Dashboard v2), so this
@@ -53,15 +53,15 @@ rejected at config load.
 
 The patterns are Bespoke's reading of BES-465's rule table (pending Jona's confirmation):
 
-| #   | BES-465 rule                                                                             | Pattern                                                                                | Label                            |
-| --- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------- |
-| 1   | Email domain bihasa.ph, bespokelabs.tech or training.net                                 | email `matches @(bihasa\.ph\|bespokelabs\.tech\|training\.net)$`                       | Internal email domain            |
-| 2   | Username starts `gla.train` / `glass.train`, or contains "test" or "admin"               | username `matches ^(gla\|glass)\.train\|test\|admin`                                   | Test, training or admin username |
-| 3   | Name has the whole word DUMMY, TEST, SAMPLE, DEMO, STUDENT or TRY, or is "Admin User"    | name `matches \b(dummy\|test\|sample\|demo\|student\|try)\b`; name `equals admin user` | Test or dummy name               |
-| 4   | Dummy Conso ID: 9991 series, one digit repeated with a short suffix, or starts 123456789 | username `matches ^9991\|^(\d)\1{5,}\d{0,3}$\|^123456789`                              | Dummy Conso ID                   |
-| 5   | Placeholder name: blank, contains "PC SFLMS Live", or starts with a legacy username      | name `equals ""`; `matches pc sflms live`; `matches ^[a-z]+\d*_[0-9a-z]{3,5}_\d+`      | Placeholder name                 |
-| 6   | Suspended account                                                                        | status `equals suspended`                                                              | Suspended account                |
-| 7   | Dealer Level is PC Center of Excellence or blank                                         | level `in ["pc center of excellence", ""]`                                             | COE or blank Dealer Level        |
+| #   | BES-465 rule                                                                             | Pattern                                                                                | Label                                                                          |
+| --- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| 1   | Email domain bihasa.ph, bespokelabs.tech or training.net                                 | email `matches @(bihasa\.ph\|bespokelabs\.tech\|training\.net)$`                       | Internal email domain                                                          |
+| 2   | Username starts `gla.train` / `glass.train`, or contains "test" or "admin"               | username `matches ^(gla\|glass)\.train\|test\|admin`                                   | Test, training or admin username                                               |
+| 3   | Name has the whole word DUMMY, TEST, SAMPLE, DEMO, STUDENT or TRY, or is "Admin User"    | name `matches \b(dummy\|test\|sample\|demo\|student\|try)\b`; name `equals admin user` | Test or dummy name                                                             |
+| 4   | Dummy Conso ID: 9991 series, one digit repeated with a short suffix, or starts 123456789 | username `matches ^9991\|^(\d)\1{5,}\d{0,3}$\|^123456789`                              | Dummy Conso ID                                                                 |
+| 5   | Placeholder name: blank, contains "PC SFLMS Live", or starts with a legacy username      | name `equals ""`; `matches pc sflms live`; `matches ^[a-z]+\d*_[0-9a-z]{3,5}_\d+`      | Placeholder name: blank / PC SFLMS Live / legacy username (one label per part) |
+| 6   | Suspended account                                                                        | status `equals suspended`                                                              | Suspended account                                                              |
+| 7   | Dealer Level is PC Center of Excellence or blank                                         | level `in ["pc center of excellence", ""]`                                             | COE or blank Dealer Level                                                      |
 
 Guesses to confirm: rule 4 reads "one digit repeated" as 6+ times with up to 3 extra digits
 (catches `111111111125` and the staging UAT pool) and "9991 series" as starting with 9991;
@@ -78,8 +78,12 @@ these facts across parts, so the final part reports them. A Dealer Level outside
 is flagged (the glossary's "one of the 4 dealer levels" and rule 7 agree only while no other
 value exists — true on staging, 2026-11-09).
 
-Every response carries `population`: `learner_accounts`, `valid_dealers`, `not_valid` (count
-per first matching rule) and `counted`, in the answer's unit.
+Every response carries `population`: `learner_accounts`, `valid_dealers`, `counted`;
+`not_valid` = hidden accounts by their **first** matching rule label (adds up to the hidden
+total); `matched_by_rule` = **every** account each label matches (overlapping, so it can add up
+to more). Rule 5's three parts have their own labels (`Placeholder name: blank / PC SFLMS Live /
+legacy username`) — add them up for BES-465's single "Placeholder name" rule. A name the LMS did
+not return is treated as unknown, not blank: name rules skip it and the answer warns.
 
 ## Profile attributes
 

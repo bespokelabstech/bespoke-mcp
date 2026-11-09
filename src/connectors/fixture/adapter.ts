@@ -226,6 +226,7 @@ export class FixtureLearningAdapter implements LearningDataPort {
         username: p.username,
         firstName: p.firstName,
         lastName: p.lastName,
+        nameShown: true,
         courseRoles: p.role === "redemptionmanager" ? ["student", p.role] : [p.role],
         lastCourseAccess: m.get(p.userId) ?? null,
         lastSiteAccess: p.lastSiteAccess,
