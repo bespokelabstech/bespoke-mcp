@@ -107,12 +107,14 @@ function addRecords(
 export interface PopulationCounts {
   all: number;
   valid: number;
-  /** condition label -> count */
+  /** rule label -> accounts whose FIRST matching rule it is (adds up to all - valid) */
   notValid: Record<string, number>;
+  /** rule label -> every account it matches (overlapping: an account can match several) */
+  matched: Record<string, number>;
 }
 
 export function emptyCounts(): PopulationCounts {
-  return { all: 0, valid: 0, notValid: {} };
+  return { all: 0, valid: 0, notValid: {}, matched: {} };
 }
 
 export function populationCounts(
@@ -130,15 +132,24 @@ export function populationCounts(
     else {
       const why = r.person.failed[0]!;
       out.notValid[why] = (out.notValid[why] ?? 0) + 1;
+      for (const label of r.person.failed) out.matched[label] = (out.matched[label] ?? 0) + 1;
     }
   }
   return out;
 }
 
 export function addCounts(a: PopulationCounts, b: PopulationCounts): PopulationCounts {
-  const notValid = { ...a.notValid };
-  for (const [k, n] of Object.entries(b.notValid)) notValid[k] = (notValid[k] ?? 0) + n;
-  return { all: a.all + b.all, valid: a.valid + b.valid, notValid };
+  const add = (x: Record<string, number>, y: Record<string, number>) => {
+    const out = { ...x };
+    for (const [k, n] of Object.entries(y)) out[k] = (out[k] ?? 0) + n;
+    return out;
+  };
+  return {
+    all: a.all + b.all,
+    valid: a.valid + b.valid,
+    notValid: add(a.notValid, b.notValid),
+    matched: add(a.matched ?? {}, b.matched ?? {}),
+  };
 }
 
 /** validOnly = keep accounts passing the saved filter; otherwise every account in scope. */

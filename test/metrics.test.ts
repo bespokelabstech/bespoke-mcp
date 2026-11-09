@@ -188,6 +188,30 @@ describe("sortMetricRows", () => {
   });
 });
 
+describe("populationCounts", () => {
+  it("counts overlaps in matched, first match in notValid", () => {
+    const p = classify(
+      account({
+        userId: 7,
+        username: "admin.test",
+        firstName: "cl_0106_00003",
+        lastName: "PC SFLMS Live",
+        profile: { level: "Great Life Builder" },
+        emailDomain: "@example.com",
+        suspended: false,
+      }),
+      t,
+    );
+    const c = populationCounts([rec(p, A, null, null)], "accounts");
+    expect(c.notValid).toEqual({ "Test, training or admin username": 1 });
+    expect(c.matched).toEqual({
+      "Test, training or admin username": 1,
+      "Placeholder name: PC SFLMS Live": 1,
+      "Placeholder name: legacy username": 1,
+    });
+  });
+});
+
 describe("loadScope on synthetic data", () => {
   it("applies the base scope and names the rules that hide each account", async () => {
     const port = new FixtureLearningAdapter({ nowSec: 1_800_000_000 });
@@ -210,6 +234,16 @@ describe("loadScope on synthetic data", () => {
     expect(byUser.get(EDGE.blankName)!.failed).toEqual(["Placeholder name: blank"]);
     expect(byUser.get(EDGE.legacyName)!.failed).toEqual(["Placeholder name: legacy username"]);
     const counts = populationCounts(all, "accounts");
+    // one bucket per rule label (rule 5's parts separately), first matching rule only
+    expect(counts.notValid).toMatchObject({
+      "Placeholder name: blank": 1,
+      "Placeholder name: legacy username": 1,
+      "Internal email domain": 1,
+    });
+    // matched counts every rule an account matches, so it can exceed notValid
+    for (const [label, n] of Object.entries(counts.notValid)) {
+      expect(counts.matched[label]).toBeGreaterThanOrEqual(n);
+    }
     const hidden = Object.values(counts.notValid).reduce((a, b) => a + b, 0);
     expect(counts.all - counts.valid).toBe(hidden);
     expect(selectPopulation(all, true).length).toBe(counts.valid);

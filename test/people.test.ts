@@ -102,6 +102,22 @@ describe("valid_dealers saved filter (BES-465 rules, provisional)", () => {
     expect(hiddenBy({ userId: 1, firstName: "Maria", lastName: "cl_0106_00003" })).toEqual([]);
   });
 
+  it("5. a name the LMS did not return is unknown, not blank", () => {
+    expect(hiddenBy({ userId: 1, firstName: "", lastName: "", nameShown: false })).toEqual([]);
+    expect(view({ userId: 1, firstName: "", lastName: "", nameShown: false }).nameKnown).toBe(false);
+    // other rules still apply
+    expect(
+      hiddenBy({ userId: 1, username: "aimon.test", firstName: "", lastName: "", nameShown: false }),
+    ).toEqual(["Test, training or admin username"]);
+  });
+
+  it("5. one account can match several parts of rule 5; each is listed", () => {
+    expect(hiddenBy({ userId: 1, firstName: "cl_0106_00003", lastName: "PC SFLMS Live" })).toEqual([
+      "Placeholder name: PC SFLMS Live",
+      "Placeholder name: legacy username",
+    ]);
+  });
+
   it("6. suspended accounts", () => {
     expect(hiddenBy({ userId: 1, suspended: true })).toEqual(["Suspended account"]);
     expect(hiddenBy({ userId: 1, suspended: null })).toEqual([]);

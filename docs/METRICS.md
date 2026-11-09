@@ -1,6 +1,6 @@
 # Metric definitions
 
-`definitions_version: 2026-11-mvp5` (returned in every response). Any change in meaning must
+`definitions_version: 2026-11-mvp6` (returned in every response). Any change in meaning must
 update this file and bump `DEFINITIONS_VERSION` in `src/domain/envelope.ts`.
 
 Labels, defaults, filters and sort follow **BES-465** (Compliance Dashboard v2), so this
@@ -78,8 +78,12 @@ these facts across parts, so the final part reports them. A Dealer Level outside
 is flagged (the glossary's "one of the 4 dealer levels" and rule 7 agree only while no other
 value exists — true on staging, 2026-11-09).
 
-Every response carries `population`: `learner_accounts`, `valid_dealers`, `not_valid` (count
-per first matching rule) and `counted`, in the answer's unit.
+Every response carries `population`: `learner_accounts`, `valid_dealers`, `counted`;
+`not_valid` = hidden accounts by their **first** matching rule label (adds up to the hidden
+total); `matched_by_rule` = **every** account each label matches (overlapping, so it can add up
+to more). Rule 5's three parts have their own labels (`Placeholder name: blank / PC SFLMS Live /
+legacy username`) — add them up for BES-465's single "Placeholder name" rule. A name the LMS did
+not return is treated as unknown, not blank: name rules skip it and the answer warns.
 
 ## Profile attributes
 

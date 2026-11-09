@@ -33,6 +33,8 @@ export interface PersonView {
   /** Whether the LMS showed an email domain / suspension flag (rules on them need it). */
   emailKnown: boolean;
   statusKnown: boolean;
+  /** False when the LMS did not return the name; rules on `name` were not applied. */
+  nameKnown: boolean;
 }
 
 export interface AccountInput {
@@ -45,6 +47,8 @@ export interface AccountInput {
   /** "@domain" of the email; null/omitted when not shown. */
   emailDomain?: string | null | undefined;
   suspended?: boolean | null | undefined;
+  /** False when the LMS did not return the name (default true): name rules are then skipped. */
+  nameShown?: boolean | undefined;
 }
 
 const LABEL_RE = /^(.*) \(([0-9A-Za-z]+)\)$/; // mirrors local_profileform catalog::LABEL_RE
@@ -134,7 +138,10 @@ export function classify(a: AccountInput, tenant: TenantConfig): PersonView {
   const failed: string[] = [];
   if (r.hide) {
     const values = fieldValues(a, identifier, level);
+    const nameShown = a.nameShown !== false;
     for (const x of r.hide) {
+      // A name the LMS did not return is unknown, not blank: never hide on it.
+      if (x.c.field === "name" && !nameShown) continue;
       if (x.test(values[x.c.field]) && !failed.includes(x.c.label)) failed.push(x.c.label);
     }
   }
@@ -150,6 +157,7 @@ export function classify(a: AccountInput, tenant: TenantConfig): PersonView {
     failed,
     emailKnown: Boolean(a.emailDomain),
     statusKnown: a.suspended === true || a.suspended === false,
+    nameKnown: a.nameShown !== false,
   };
 }
 

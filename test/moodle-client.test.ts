@@ -155,6 +155,7 @@ describe("MoodleLearningAdapter", () => {
       username: "u1",
       firstName: "F",
       lastName: "L",
+      nameShown: true,
       courseRoles: ["student"],
       lastCourseAccess: 1_700_000_000,
       lastSiteAccess: 1_700_000_100,

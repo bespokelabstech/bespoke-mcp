@@ -34,6 +34,8 @@ export interface Enrolment {
   username: string;
   firstName: string;
   lastName: string;
+  /** False when the LMS returned neither first nor last name (not shown — not the same as blank). */
+  nameShown: boolean;
   /** Course-level role shortnames in this course. */
   courseRoles: string[];
   /** Last access to THIS course (epoch s). Web only on GLA: the mobile app does not update it. */

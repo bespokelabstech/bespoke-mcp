@@ -134,6 +134,7 @@ export class MoodleLearningAdapter implements LearningDataPort {
           username: u.username ?? "",
           firstName: text(u.firstname),
           lastName: text(u.lastname),
+          nameShown: u.firstname != null || u.lastname != null,
           courseRoles: (u.roles ?? []).map((r) => r.shortname),
           lastCourseAccess: positiveOrNull(u.lastcourseaccess),
           lastSiteAccess: positiveOrNull(u.lastaccess),
