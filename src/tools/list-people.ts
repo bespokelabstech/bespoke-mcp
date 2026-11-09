@@ -4,38 +4,53 @@ import { assertWithinBudget } from "@/core/concurrency";
 import { AppError, isOutOfTime } from "@/core/errors";
 import { loadPersonCourses } from "@/domain/enrich";
 import { buildEnvelope } from "@/domain/envelope";
+import { compareValues, isAccessed, parseSort } from "@/domain/metrics";
+import type { Filters } from "@/domain/people";
 import { familyNotes } from "@/domain/people";
 import type { EnrolmentRecord } from "@/domain/population";
-import {
-  loadScope,
-  loadScopePage,
-  mergedDuplicateAccounts,
-  selectPopulation,
-  statusCounts,
-} from "@/domain/population";
+import { loadScope, loadScopePage, populationCounts, selectPopulation } from "@/domain/population";
 import { resolveCourseScope } from "@/domain/scope";
 import { SIGNALS } from "@/domain/signals";
 import type { AccessWindow } from "@/domain/time";
 import { formatInZone, inWindow, resolveWindow } from "@/domain/time";
 import type { Course, LearningDataPort, PersonCourse } from "@/ports/learning";
 import type { TenantConfig } from "@/tenants/schema";
+import { regionSourceNote } from "./notes";
 import type { ToolDeps } from "./runtime";
 import { READ_ONLY_ANNOTATIONS, requireLearning, runTool } from "./runtime";
 import {
+  excludeField,
   filtersField,
-  labelledCounts,
-  populationField,
-  statusLabel,
-  toStatuses,
+  populationOut,
+  resolveFilters,
+  validOnlyField,
   windowFields,
 } from "./shared-schemas";
 
+/** Sortable columns. progress / accessed need one LMS call per account (capped). */
+const SORT_KEYS = [
+  "name",
+  "conso_id",
+  "region",
+  "branch",
+  "level",
+  "last_sign_in",
+  "web_course_access",
+  "progress",
+  "accessed",
+] as const;
+type SortKey = (typeof SORT_KEYS)[number];
+const SORT_VALUES = ["enrolment_order", ...SORT_KEYS.flatMap((k) => [k, `-${k}`])] as [string, ...string[]];
+const PER_PERSON_SORT: SortKey[] = ["progress", "accessed"];
+
+type WhereSignal = "accessed" | "logged_in" | "web_course_access";
+
 /**
  * Two ways to list:
- *  - default (sort name / access): loads the whole course once, so it can sort, search, filter by
- *    a signal and report exact totals. Very large courses may not fit one call.
+ *  - sorted (default sort name): loads the whole course once, so it can sort on any column,
+ *    search, filter by a metric and report exact totals. Very large courses may not fit one call.
  *  - sort "enrolment_order": pages through the LMS in its own order and stops as soon as the page
- *    is full — fast for any course size, but no totals, search, signal filter or other sort.
+ *    is full — fast for any course size, but no totals, search, metric filter or other sort.
  */
 export function registerListPeople(server: McpServer, deps: ToolDeps): void {
   const t = deps.tenant;
@@ -46,24 +61,26 @@ export function registerListPeople(server: McpServer, deps: ToolDeps): void {
     {
       title: `${v.personPlural} in a ${v.course}`,
       description:
-        `For one ${v.course.toLowerCase()}: the ${people} enrolled (name, ${t.identity.label}, status, ` +
-        `${t.dimensions.region.label}, ${t.dimensions.level.label}, ${t.dimensions.branch.label}, last app/site access, last web course access), ` +
-        `filterable by profile values, population, a signal (e.g. who has not started) and a name/ID search. ` +
-        `Also use it to find a ${v.person.toLowerCase()} by name, or to review legacy/excluded accounts. ` +
-        `For very large ${v.coursePlural.toLowerCase()}, use sort "enrolment_order" with next_cursor to browse quickly (no totals).`,
-      inputSchema: z.object({
+        `For one ${v.course.toLowerCase()}: the ${people} enrolled (name, username, ${t.identity.label}, valid or not, ` +
+        `${t.dimensions.region.label}, ${t.dimensions.level.label}, ${t.dimensions.branch.label}, last sign-in, last web course access), ` +
+        `with the same filters and defaults as query_metrics, a metric filter (e.g. who has not accessed), a name/ID search ` +
+        `and sorting on any column (e.g. sort "-last_sign_in"). Also use it to find a ${v.person.toLowerCase()} by name, or ` +
+        `with valid_only=false to review accounts that fail the saved filter. For very large ${v.coursePlural.toLowerCase()}, ` +
+        `use sort "enrolment_order" with next_cursor to browse quickly (no totals).`,
+      inputSchema: z.strictObject({
         course_id: z.number().int().positive(),
         filters: filtersField(t),
-        population: populationField(t),
+        exclude: excludeField(t),
+        valid_only: validOnlyField(t),
         where: z
           .object({
-            signal: z.enum(["started", "site_last_access", "web_course_access"]),
+            signal: z.enum(["accessed", "logged_in", "web_course_access"]),
             state: z.enum(["yes", "no"]),
           })
           .optional()
           .describe(
-            "Keep only people for whom the signal is true (yes) or false (no). For access signals with a window, " +
-              "yes = accessed within the window; without a window, yes = ever.",
+            "Keep only accounts for whom the metric is true (yes) or false (no). For logged_in/web_course_access with a date " +
+              "range, yes = inside the range; without one, yes = ever. accessed is all-time.",
           ),
         ...windowFields(t),
         search: z
@@ -71,16 +88,18 @@ export function registerListPeople(server: McpServer, deps: ToolDeps): void {
           .min(2)
           .max(100)
           .optional()
-          .describe(`Case-insensitive match on name or ${t.identity.label}.`),
+          .describe(`Case-insensitive match on name, username or ${t.identity.label}.`),
         include_progress: z
           .boolean()
           .default(false)
-          .describe("Adds progress %, completed and started for the listed page."),
+          .describe("Adds accessed, progress % and completed for the listed page."),
         sort: z
-          .enum(["name", "site_access_desc", "web_access_desc", "enrolment_order"])
+          .enum(SORT_VALUES)
           .default("name")
           .describe(
-            "enrolment_order = fast browsing in the LMS's own order for any course size (use next_cursor; no totals, search or where).",
+            "Column to sort on; prefix '-' for descending (e.g. -last_sign_in). progress/accessed need one LMS call per " +
+              `account and work up to ${t.limits.maxPeopleForPersonSignals} matching accounts. ` +
+              "enrolment_order = fast browsing in the LMS's own order for any course size (use next_cursor; no totals, search or where).",
           ),
         limit: z.number().int().min(1).max(100).default(50),
         offset: z.number().int().min(0).default(0).describe("For the sorted modes."),
@@ -98,10 +117,23 @@ export function registerListPeople(server: McpServer, deps: ToolDeps): void {
         const now = deps.nowSec();
         const window = resolveWindow(args, t.timezone, now);
         const [course] = await resolveCourseScope(port, t, { course_ids: [args.course_id] });
-        const ctx: Ctx = { port, t, course: course!, window, statuses: toStatuses(args.population, t), args };
+        const resolved = resolveFilters(args, t);
+        const ctx: Ctx = {
+          port,
+          t,
+          course: course!,
+          window,
+          filters: resolved.filters,
+          validOnly: resolved.validOnly,
+          args,
+        };
         const warnings: string[] = [];
         if (window?.semantics === "last_access_in_range") warnings.push(window.description);
         if (args.where?.signal === "web_course_access") warnings.push(SIGNALS.web_course_access.caveat!);
+        if (args.where?.signal === "accessed" && window) warnings.push(SIGNALS.accessed.caveat!);
+        if (resolved.filters.include.region?.length || resolved.filters.exclude.region?.length) {
+          warnings.push(regionSourceNote(t));
+        }
 
         const data =
           args.sort === "enrolment_order" ? await browse(ctx, warnings) : await sortedList(ctx, warnings);
@@ -111,7 +143,7 @@ export function registerListPeople(server: McpServer, deps: ToolDeps): void {
           source: port.source,
           nowSec: now,
           courses: [course!],
-          filters: args.filters,
+          filters: resolved.applied,
           window,
           warnings,
           data: {
@@ -129,20 +161,22 @@ interface Ctx {
   t: TenantConfig;
   course: Course;
   window: AccessWindow | null;
-  statuses: ReturnType<typeof toStatuses>;
+  filters: Filters;
+  validOnly: boolean;
   args: {
-    filters?: Record<string, string[] | undefined> | undefined;
-    where?: { signal: "started" | "site_last_access" | "web_course_access"; state: "yes" | "no" } | undefined;
+    where?: { signal: WhereSignal; state: "yes" | "no" } | undefined;
     search?: string | undefined;
     include_progress: boolean;
-    sort: "name" | "site_access_desc" | "web_access_desc" | "enrolment_order";
+    sort: string;
     limit: number;
     offset: number;
     cursor?: string | undefined;
   };
 }
 
-/** Whole-course listing: exact totals, search, signal filter and sorting. */
+type Progress = Map<number, Map<number, PersonCourse>>;
+
+/** Whole-course listing: exact totals, search, metric filter and sorting on any column. */
 async function sortedList(c: Ctx, warnings: string[]) {
   const { t, course, args } = c;
   if (args.cursor) {
@@ -153,7 +187,7 @@ async function sortedList(c: Ctx, warnings: string[]) {
   }
   let scope;
   try {
-    scope = await loadScope(c.port, t, [course], args.filters ?? {});
+    scope = await loadScope(c.port, t, [course], c.filters);
   } catch (err) {
     // Only a time-budget overrun means "too large"; a genuine LMS outage passes through unchanged.
     if (err instanceof AppError && err.code === "scope_too_large") {
@@ -166,52 +200,82 @@ async function sortedList(c: Ctx, warnings: string[]) {
     throw err;
   }
   const { records, observedRegions } = scope;
-  const pop = statusCounts(records, "people");
-  let selected = selectPopulation(records, c.statuses);
-  if (args.filters?.region?.length) {
-    warnings.push(...familyNotes(t.dimensions.region.label, [...observedRegions], args.filters.region));
+  const pop = populationCounts(records, "accounts");
+  let selected = selectPopulation(records, c.validOnly);
+  if (c.filters.include.region?.length) {
+    warnings.push(...familyNotes(t.dimensions.region.label, [...observedRegions], c.filters.include.region));
   }
   const q = args.search?.toLowerCase();
   if (q) {
     selected = selected.filter(
-      (r) => r.person.name.toLowerCase().includes(q) || (r.person.identifier ?? "").includes(q),
+      (r) =>
+        r.person.name.toLowerCase().includes(q) ||
+        r.person.username.toLowerCase().includes(q) ||
+        (r.person.identifier ?? "").toLowerCase().includes(q),
     );
   }
 
-  let progress: Map<number, Map<number, PersonCourse>> | null = null;
-  if (args.where?.signal === "started") {
+  const { key, desc } = parseSort<SortKey>(args.sort);
+  let progress: Progress | null = null;
+  const needsAll = args.where?.signal === "accessed" || PER_PERSON_SORT.includes(key);
+  if (needsAll) {
     const ids = [...new Set(selected.map((r) => r.person.userId))];
     if (ids.length > t.limits.maxPeopleForPersonSignals) {
+      const what = args.where?.signal === "accessed" ? "Filtering by accessed" : `Sorting by ${key}`;
       throw new AppError(
         "scope_too_large",
-        `Filtering by 'started' needs one LMS call per person; ${ids.length} accounts exceed the live limit of ` +
-          `${t.limits.maxPeopleForPersonSignals}. Add a region/level/branch filter or a search.`,
+        `${what} needs one LMS call per account; ${ids.length} accounts exceed the live limit of ` +
+          `${t.limits.maxPeopleForPersonSignals}. Add a region/level/branch filter or a search, ` +
+          "or sort by name, conso_id, region, branch, level or last_sign_in.",
       );
     }
     progress = await loadPersonCourses(c.port, t, ids);
   }
-  const startedOf = (userId: number): boolean => {
-    const pc = progress?.get(userId)?.get(course.id);
-    return pc ? pc.completed === true || (pc.progressPct ?? 0) > 0 : false;
-  };
-  const accessed = (ts: number | null) => (c.window ? inWindow(ts, c.window) : ts !== null);
+  const pcOf = (userId: number) => progress?.get(userId)?.get(course.id) ?? null;
+  const inRange = (ts: number | null) => (c.window ? inWindow(ts, c.window) : ts !== null);
   if (args.where) {
     const want = args.where.state === "yes";
     const signal = args.where.signal;
     selected = selected.filter((r) => {
+      const pc = pcOf(r.person.userId);
       const value =
-        signal === "started"
-          ? startedOf(r.person.userId)
-          : accessed(signal === "site_last_access" ? r.lastSiteAccess : r.lastCourseAccess);
+        signal === "accessed"
+          ? pc !== null && isAccessed(pc)
+          : inRange(signal === "logged_in" ? r.lastSiteAccess : r.lastCourseAccess);
       return value === want;
     });
   }
 
-  selected.sort((a, b) => {
-    if (args.sort === "site_access_desc") return (b.lastSiteAccess ?? -1) - (a.lastSiteAccess ?? -1);
-    if (args.sort === "web_access_desc") return (b.lastCourseAccess ?? -1) - (a.lastCourseAccess ?? -1);
-    return a.person.name.localeCompare(b.person.name);
-  });
+  const sortValue = (r: EnrolmentRecord): number | string | null => {
+    switch (key) {
+      case "name":
+        return r.person.name.toLowerCase();
+      case "conso_id":
+        return r.person.identifier?.toLowerCase() ?? null;
+      case "region":
+        return r.person.region.toLowerCase();
+      case "branch":
+        return r.person.branch.label.toLowerCase();
+      case "level":
+        return r.person.level.toLowerCase();
+      case "last_sign_in":
+        return r.lastSiteAccess;
+      case "web_course_access":
+        return r.lastCourseAccess;
+      case "progress":
+        return pcOf(r.person.userId)?.progressPct ?? null;
+      case "accessed": {
+        const pc = pcOf(r.person.userId);
+        return pc ? Number(isAccessed(pc)) : null;
+      }
+    }
+  };
+  selected.sort(
+    (a, b) =>
+      compareValues(sortValue(a), sortValue(b), desc) ||
+      a.person.name.localeCompare(b.person.name) ||
+      a.person.userId - b.person.userId,
+  );
   const page = selected.slice(args.offset, args.offset + args.limit);
   if (args.include_progress && !progress) {
     progress = await loadPersonCourses(
@@ -221,9 +285,9 @@ async function sortedList(c: Ctx, warnings: string[]) {
     );
   }
   return {
-    population: labelledCounts(pop, t, mergedDuplicateAccounts(records)),
-    matched_accounts: selected.length,
-    matched_people: new Set(selected.map((r) => r.person.key)).size,
+    population: populationOut(pop, t, c.validOnly),
+    matched: selected.length,
+    sort: args.sort,
     next_offset: args.offset + page.length < selected.length ? args.offset + page.length : null,
     people: page.map((r) => row(c, r, progress)),
   };
@@ -238,7 +302,7 @@ async function browse(c: Ctx, warnings: string[]) {
   if (args.search || args.where) {
     throw new AppError(
       "invalid_input",
-      'sort "enrolment_order" cannot be combined with search or where; use the default sort for those.',
+      'sort "enrolment_order" cannot be combined with search or where; use another sort for those.',
     );
   }
   if (args.offset > 0) {
@@ -258,7 +322,7 @@ async function browse(c: Ctx, warnings: string[]) {
     let page;
     try {
       assertWithinBudget();
-      page = await loadScopePage(c.port, t, course, off, args.filters ?? {});
+      page = await loadScopePage(c.port, t, course, off, c.filters);
     } catch (err) {
       // Out of time after reading at least one page: hand back what we have (possibly nothing,
       // when matches are rare) and a cursor at the page we reached, so the caller can continue.
@@ -270,7 +334,7 @@ async function browse(c: Ctx, warnings: string[]) {
     }
     scanned++;
     page.observedRegions.forEach((r) => observed.add(r));
-    const matches = selectPopulation(page.records, c.statuses).slice(skip);
+    const matches = selectPopulation(page.records, c.validOnly).slice(skip);
     const take = matches.slice(0, args.limit - out.length);
     out.push(...take);
     if (take.length < matches.length) {
@@ -292,8 +356,8 @@ async function browse(c: Ctx, warnings: string[]) {
         out.map((r) => r.person.userId),
       )
     : null;
-  if (args.filters?.region?.length) {
-    warnings.push(...familyNotes(t.dimensions.region.label, [...observed], args.filters.region));
+  if (c.filters.include.region?.length) {
+    warnings.push(...familyNotes(t.dimensions.region.label, [...observed], c.filters.include.region));
   }
   if (next && out.length === 0) {
     warnings.push(
@@ -301,31 +365,31 @@ async function browse(c: Ctx, warnings: string[]) {
     );
   }
   warnings.push(
-    "Browsing in enrolment order: totals are not computed (use the default sort for population and matched counts). " +
+    "Browsing in enrolment order: totals are not computed (use another sort for population and matched counts). " +
       "Best effort: if enrolments change while browsing, someone may repeat or be skipped.",
   );
   return { next_cursor: next, people: out.map((r) => row(c, r, progress)) };
 }
 
-function row(c: Ctx, r: EnrolmentRecord, progress: Map<number, Map<number, PersonCourse>> | null) {
+function row(c: Ctx, r: EnrolmentRecord, progress: Progress | null) {
   const { t, course } = c;
   const pc = progress?.get(r.person.userId)?.get(course.id);
   return {
     name: r.person.name,
-    identifier: r.person.identifier ?? t.emptyValueLabel,
-    ...(r.person.identifierNormalised ? { identifier_repaired: true } : {}),
-    status: statusLabel(r.person.status, t),
-    ...(r.person.reason ? { excluded_reason: r.person.reason } : {}),
+    username: r.person.username,
+    conso_id: r.person.identifier ?? t.emptyValueLabel,
+    valid: r.person.valid,
+    ...(r.person.failed.length ? { not_valid_because: r.person.failed } : {}),
     region: r.person.region,
     level: r.person.level,
     branch: r.person.branch.label,
     branch_name: r.person.branch.name ?? t.emptyValueLabel,
     branch_code: r.person.branch.code ?? t.emptyValueLabel,
-    site_last_access: formatInZone(r.lastSiteAccess, t.timezone),
+    last_sign_in: formatInZone(r.lastSiteAccess, t.timezone),
     web_course_access: formatInZone(r.lastCourseAccess, t.timezone),
     ...(progress
       ? {
-          started: pc ? pc.completed === true || (pc.progressPct ?? 0) > 0 : null,
+          accessed: pc ? isAccessed(pc) : null,
           progress_pct: pc?.progressPct ?? null,
           completed: pc?.completed ?? null,
         }

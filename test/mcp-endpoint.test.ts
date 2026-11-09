@@ -99,12 +99,25 @@ describe("POST /api/mcp", () => {
     expect(tools.find((t) => t.name === "get_person")!.title).toBe("Dealer detail");
   });
 
-  it("describe_capabilities states each signal's definition and availability", async () => {
+  it("describe_capabilities carries the glossary, saved filter, defaults and signals", async () => {
     const { payload } = await callTool(POST, "describe_capabilities", {});
     const web = payload.signals.find((s: { id: string }) => s.id === "web_course_access");
     expect(web.sees_app_activity).toBe(false);
     expect(payload.signals.find((s: { id: string }) => s.id === "avg_score").available).toBe(true);
-    expect(Object.keys(payload.population)).toEqual(["dealer", "legacy", "excluded", "default"]);
+    const labels = payload.glossary.terms.map((g: { label: string }) => g.label);
+    expect(labels).toEqual(
+      expect.arrayContaining(["Logged in", "Accessed", "Access rate", "Completed / Avg. completion"]),
+    );
+    const loggedIn = payload.glossary.terms.find((g: { label: string }) => g.label === "Logged in");
+    expect(loggedIn.meaning).toBe(
+      "Signed in to the app at least once. Within a date range: had a session in the range.",
+    );
+    expect(loggedIn.in_this_connector).toMatch(/last sign-in/);
+    expect(payload.saved_filters.valid_dealers.provisional).toBe(true);
+    expect(payload.defaults).toMatchObject({
+      valid_only: true,
+      exclude: { level: ["PC Center of Excellence"] },
+    });
   });
 
   it("list_courses hides invisible courses and flags unnamed categories", async () => {
@@ -114,7 +127,7 @@ describe("POST /api/mcp", () => {
     expect(payload.diagnostics.ms).toBeGreaterThanOrEqual(0);
   });
 
-  it("query_metrics: dealers only by default, with population counts and look-alike notes", async () => {
+  it("query_metrics: valid dealers and the default level exclude by default, with population counts", async () => {
     const { result, payload } = await callTool(POST, "query_metrics", {
       course_ids: [10, 11],
       group_by: ["region"],
@@ -122,28 +135,80 @@ describe("POST /api/mcp", () => {
     });
     expect(result.isError).toBeFalsy();
     expect(payload.data.complete).toBe(true);
-    expect(payload.data.population).toMatchObject({ legacy: 3, excluded: 6 });
-    expect(payload.data.totals.enrolled).toBe(payload.data.population.dealer);
-    expect(payload.data.totals.started.unknown).toBe(0);
+    expect(payload.data.population).toMatchObject({
+      not_valid: { "Dummy Conso ID": 3 },
+      counted: "valid_dealers",
+    });
+    expect(payload.data.population.learner_accounts - payload.data.population.valid_dealers).toBe(3);
+    expect(payload.filters).toMatchObject({
+      saved_filter: "valid_dealers",
+      defaults_applied: ["exclude.level"],
+    });
+    expect(payload.data.totals.enrolled).toBe(payload.data.population.valid_dealers);
+    expect(payload.data.totals.accessed.unknown).toBe(0);
+    // Accessed is all-time: with a date range the access rate is not computed, and a warning says so
+    expect(payload.data.totals.accessed.access_rate_pct).toBeNull();
+    expect(payload.warnings.join(" ")).toMatch(/All-time only/);
+    expect(payload.warnings.join(" ")).toMatch(/stored on each profile/);
     const sum = payload.data.rows.reduce((n: number, r: { enrolled: number }) => n + r.enrolled, 0);
     expect(sum).toBe(payload.data.totals.enrolled);
     expect(payload.warnings.join(" ")).toMatch(/"Visayas", "Visayas 1", "Visayas 2" are separate values/);
   });
 
-  it("query_metrics: population can be combined on request", async () => {
-    const only = await callTool(POST, "query_metrics", { course_ids: [10], signals: ["site_last_access"] });
-    const both = await callTool(POST, "query_metrics", {
-      course_ids: [10],
-      signals: ["site_last_access"],
-      population: ["dealer", "legacy"],
+  it("query_metrics: all accounts on request (valid_only=false, empty level exclude)", async () => {
+    const args = { course_ids: [10], signals: ["logged_in"] };
+    const only = await callTool(POST, "query_metrics", args);
+    const all = await callTool(POST, "query_metrics", { ...args, valid_only: false });
+    const everything = await callTool(POST, "query_metrics", {
+      ...args,
+      valid_only: false,
+      exclude: { level: [] },
     });
-    expect(both.payload.data.totals.enrolled).toBe(only.payload.data.totals.enrolled + 3);
+    expect(all.payload.data.totals.enrolled).toBe(only.payload.data.totals.enrolled + 3);
+    expect(everything.payload.data.totals.enrolled).toBe(all.payload.data.totals.enrolled + 1); // the COE account
+    expect(everything.payload.data.population.counted).toBe("all");
+  });
+
+  it("query_metrics: sorts on any column and checks the column's metric was asked for", async () => {
+    const { payload } = await callTool(POST, "query_metrics", {
+      group_by: ["region"],
+      count_by: "enrolments",
+      signals: ["logged_in"],
+      sort: "group",
+    });
+    const labels = payload.data.rows.map((r: { group: { region: string } }) => r.group.region);
+    expect(labels).toEqual([...labels].sort((a: string, b: string) => a.localeCompare(b)));
+    const bad = await callTool(POST, "query_metrics", {
+      course_ids: [10],
+      signals: ["logged_in"],
+      sort: "-accessed",
+    });
+    expect(bad.payload.error.code).toBe("invalid_input");
+  });
+
+  it("query_metrics: groups by category and rejects unknown (old) argument names", async () => {
+    const { payload } = await callTool(POST, "query_metrics", {
+      group_by: ["category"],
+      count_by: "enrolments",
+      signals: ["logged_in"],
+    });
+    expect(
+      payload.data.rows.map((r: { group: { category: { id: number } } }) => r.group.category.id).sort(),
+    ).toEqual([2, 3, 4, 9]);
+    const old = await rpcBody(
+      await POST(
+        rpc("tools/call", { name: "query_metrics", arguments: { course_ids: [10], since: "2026-01-01" } }),
+      ),
+    );
+    const oldResult = old.result as { isError: boolean; content: Array<{ text: string }> };
+    expect(oldResult.isError).toBe(true);
+    expect(oldResult.content[0]!.text).toMatch(/since/);
   });
 
   it("query_metrics: per-course enrolment metrics with average score", async () => {
     const { payload } = await callTool(POST, "query_metrics", {
       group_by: ["course"],
-      signals: ["site_last_access", "avg_score"],
+      signals: ["logged_in", "avg_score"],
     });
     expect(payload.data.unit).toBe("enrolments");
     expect(payload.data.complete).toBe(true);
@@ -160,27 +225,47 @@ describe("POST /api/mcp", () => {
     expect(payload.warnings.join(" ")).toMatch(/Web only/);
   });
 
-  it("list_people: who has not started, and legacy accounts for review", async () => {
-    const notStarted = await callTool(POST, "list_people", {
+  it("list_people: who has not accessed, accounts failing the saved filter, sorting", async () => {
+    const notAccessed = await callTool(POST, "list_people", {
       course_id: 10,
-      where: { signal: "started", state: "no" },
+      where: { signal: "accessed", state: "no" },
       limit: 100,
     });
-    expect(notStarted.payload.data.people.every((p: { started: boolean }) => p.started === false)).toBe(true);
-    const legacy = await callTool(POST, "list_people", { course_id: 10, population: ["legacy"] });
-    expect(legacy.payload.data.people.map((p: { identifier: string }) => p.identifier).sort()).toEqual([
-      "fb 007700901",
-      "legacy.user",
-      "nl_0999_0007",
+    expect(notAccessed.payload.data.people.every((p: { accessed: boolean }) => p.accessed === false)).toBe(
+      true,
+    );
+    const all = await callTool(POST, "list_people", {
+      course_id: 10,
+      valid_only: false,
+      limit: 100,
+      sort: "-conso_id",
+    });
+    const failing = all.payload.data.people.filter((p: { valid: boolean }) => !p.valid);
+    expect(failing.map((p: { conso_id: string }) => p.conso_id).sort()).toEqual([
+      "111111111111",
+      "111111111125",
+      "123123123123",
     ]);
-    expect(legacy.payload.data.people.every((p: { status: string }) => p.status === "legacy")).toBe(true);
+    expect(failing.every((p: { not_valid_because: string[] }) => p.not_valid_because.length > 0)).toBe(true);
+    const bySignIn = await callTool(POST, "list_people", {
+      course_id: 10,
+      sort: "-last_sign_in",
+      limit: 100,
+    });
+    const times = bySignIn.payload.data.people
+      .map((p: { last_sign_in: string | null }) => p.last_sign_in)
+      .filter((x: string | null) => x !== null);
+    expect(times).toEqual([...times].sort().reverse());
+    expect(bySignIn.payload.data.people.at(-1).last_sign_in).toBeNull(); // nulls last
   });
 
-  it("get_person: repairs a dropped leading zero", async () => {
-    const { payload } = await callTool(POST, "get_person", { identifier: "03210000000" });
-    expect(payload.data.person.identifier).toBe("003210000000");
-    expect(payload.data.person.status).toBe("dealer");
+  it("get_person: looks up the username as stored (no repair)", async () => {
+    const { payload } = await callTool(POST, "get_person", { identifier: "003210000000" });
+    expect(payload.data.person.conso_id).toBe("003210000000");
+    expect(payload.data.person.valid).toBe(true);
     expect(payload.data.courses.length).toBeGreaterThan(0);
+    const dropped = await callTool(POST, "get_person", { identifier: "03210000000" });
+    expect(dropped.payload.error.code).toBe("not_found");
   });
 
   it("returns safe errors for invalid scope", async () => {
@@ -192,7 +277,7 @@ describe("POST /api/mcp", () => {
   it("accepts a category id whose name is hidden from the service account", async () => {
     const { result, payload } = await callTool(POST, "query_metrics", {
       category_ids: [9],
-      signals: ["site_last_access"],
+      signals: ["logged_in"],
     });
     expect(result.isError).toBeFalsy();
     expect(payload.scope.courses.map((c: { id: number }) => c.id)).toEqual([40]);
@@ -253,13 +338,13 @@ describe("answers in parts (stateless cursor)", () => {
         p.listCourseEnrolmentsPage = async (...a) => (await delay(450), orig(...a));
       },
     );
-    const args = { group_by: ["course"], signals: ["site_last_access"], recent_days: 30 };
+    const args = { group_by: ["course"], signals: ["logged_in"], recent_days: 30 };
     const parts = await untilComplete(slowCall, args);
     expect(parts.length).toBeGreaterThan(1);
     expect(parts.slice(0, -1).some((p) => p.data.progress.course_in_progress)).toBe(true); // split mid-course
+    expect(parts.slice(0, -1).every((p) => p.data.rows.length === 0)).toBe(true); // all rows come last, sortable
     const single = await fastCall(args);
-    const rows = parts.flatMap((p) => p.data.rows).sort((a, b) => a.group.course.id - b.group.course.id);
-    expect(rows).toEqual([...single.data.rows].sort((a, b) => a.group.course.id - b.group.course.id));
+    expect(last(parts).data.rows).toEqual(single.data.rows);
     expect(last(parts).data.totals).toEqual(single.data.totals);
     expect(last(parts).data.population).toEqual(single.data.population);
     const bad = await slowCall({ ...args, group_by: ["level"], cursor: parts[0]!.data.next_cursor });
@@ -274,7 +359,7 @@ describe("answers in parts (stateless cursor)", () => {
         p.listCourseEnrolmentsPage = async (...a) => (await delay(450), orig(...a));
       },
     );
-    const args = { group_by: ["region"], count_by: "enrolments", signals: ["site_last_access"] };
+    const args = { group_by: ["region"], count_by: "enrolments", signals: ["logged_in"] };
     const parts = await untilComplete(slowCall, args);
     expect(parts.length).toBeGreaterThan(1);
     // look-alike notes cover regions seen in every part, not only the last one
@@ -285,7 +370,7 @@ describe("answers in parts (stateless cursor)", () => {
     expect(last(parts).data.totals).toEqual(single.data.totals);
   }, 60_000);
 
-  it("answers 'started' for more people than fit one call, in people batches", async () => {
+  it("answers 'accessed' for more accounts than fit one call, in account batches", async () => {
     const { slowCall, fastCall } = await handlers(
       { requestBudgetMs: 5_000 }, // default 300-person threshold: batching must still kick in
       (p) => {
@@ -293,38 +378,33 @@ describe("answers in parts (stateless cursor)", () => {
         p.listPersonCourses = async (id) => (await delay(120), orig(id));
       },
     );
-    const args = { course_ids: [10], group_by: ["region"], signals: ["started", "completion"] };
+    const args = { course_ids: [10], group_by: ["region"], signals: ["accessed", "progress"] };
     const parts = await untilComplete(slowCall, args);
     expect(parts.length).toBeGreaterThan(1);
-    expect(parts[0]!.data.progress.people_total).toBeLessThan(300);
+    expect(parts[0]!.data.progress.accounts_total).toBeLessThan(300);
     expect(last(parts).data.skipped_signals).toBeUndefined();
     const single = await fastCall(args);
     expect(single.data.complete).toBe(true);
     expect(last(parts).data.totals).toEqual(single.data.totals);
     expect(last(parts).data.rows).toEqual(single.data.rows);
     expect(last(parts).data.population).toEqual(single.data.population);
-    expect(last(parts).data.totals.started.unknown).toBe(0);
+    expect(last(parts).data.totals.accessed.unknown).toBe(0);
   }, 60_000);
 
-  it("resumes people batches by key, so removing an already-counted person skips nobody", async () => {
+  it("resumes account batches by key, so removing an already-counted account skips nobody", async () => {
     const { slowPort, slowCall, fastCall } = await handlers({ requestBudgetMs: 5_000 }, (p) => {
       const orig = p.listPersonCourses.bind(p);
       p.listPersonCourses = async (id) => (await delay(120), orig(id));
     });
-    const args = { course_ids: [10], signals: ["started"] };
+    const args = { course_ids: [10], signals: ["accessed"] };
     const single = await fastCall(args);
     const first = await slowCall(args);
     expect(first.data.complete).toBe(false);
-    // Remove the dealer with the smallest counting key (processed in part 1) from the course.
-    const { classify } = await import("@/domain/people");
-    const { loadTenant } = await import("@/tenants/registry");
-    const tenant = loadTenant("gla", "staging");
-    const enrolled = slowPort.people.filter((x) => slowPort.access.get(10)?.has(x.userId));
-    const dealers = enrolled
-      .map((x) => ({ x, v: classify({ ...x, courseRoles: [x.role] }, tenant) }))
-      .filter((d) => d.v.status === "person")
-      .sort((a, b) => (a.v.key < b.v.key ? -1 : 1));
-    slowPort.access.get(10)!.delete(dealers[0]!.x.userId);
+    // Remove the account with the smallest key (processed in part 1) from the course.
+    const enrolled = slowPort.people
+      .filter((x) => slowPort.access.get(10)?.has(x.userId))
+      .sort((a, b) => a.userId - b.userId);
+    slowPort.access.get(10)!.delete(enrolled[0]!.userId);
     const parts = [first];
     while (!last(parts).data.complete && parts.length < 12) {
       parts.push(await slowCall({ ...args, cursor: last(parts).data.next_cursor }));
@@ -347,7 +427,7 @@ describe("answers in parts (stateless cursor)", () => {
     expect(parts.length).toBeGreaterThan(1);
     expect(last(parts).data.totals).toEqual(single.data.totals);
     expect(single.data.totals.avg_score.graded_items).toBeGreaterThan(0);
-    const mixed = await fastCall({ course_ids: [10], signals: ["started", "avg_score"] });
+    const mixed = await fastCall({ course_ids: [10], signals: ["accessed", "avg_score"] });
     expect(mixed.data.skipped_signals.map((x: { signal: string }) => x.signal)).toEqual(["avg_score"]);
   }, 60_000);
 });
@@ -380,12 +460,7 @@ describe("list_people paging and population details", () => {
     const { call } = await handlerWith({ participantsPageSize: 50 });
     const sortedNames: string[] = [];
     for (let offset: number | null = 0; offset !== null;) {
-      const pg = await call("list_people", {
-        course_id: 10,
-        limit: 100,
-        offset,
-        population: ["dealer", "legacy"],
-      });
+      const pg = await call("list_people", { course_id: 10, limit: 100, offset });
       sortedNames.push(...pg.data.people.map((p: { name: string }) => p.name));
       offset = pg.data.next_offset;
     }
@@ -397,7 +472,6 @@ describe("list_people paging and population details", () => {
         course_id: 10,
         sort: "enrolment_order",
         limit: 30,
-        population: ["dealer", "legacy"],
         ...(cursor ? { cursor } : {}),
       });
       expect(page.data.people.length).toBeLessThanOrEqual(30);
@@ -443,42 +517,39 @@ describe("list_people paging and population details", () => {
         orig(...a)
       );
     });
-    // excluded accounts are rare in the fixture and sit at the end of the enrolment order
-    const first = await call("list_people", {
-      course_id: 10,
-      sort: "enrolment_order",
-      population: ["excluded"],
-    });
+    // the one COE account is rare in the fixture and sits at the end of the enrolment order
+    const coe = { level: ["PC Center of Excellence"] };
+    const first = await call("list_people", { course_id: 10, sort: "enrolment_order", filters: coe });
     expect(first.error).toBeUndefined();
     expect(first.data.next_cursor).toMatch(/^\d+:\d+$/);
-    const found: string[] = [...first.data.people.map((p: { status: string }) => p.status)];
+    const found: string[] = [...first.data.people.map((p: { level: string }) => p.level)];
     let cursor = first.data.next_cursor;
     for (let i = 0; cursor && i < 6; i++) {
       const page = await call("list_people", {
         course_id: 10,
         sort: "enrolment_order",
-        population: ["excluded"],
+        filters: coe,
         cursor,
       });
-      found.push(...page.data.people.map((p: { status: string }) => p.status));
+      found.push(...page.data.people.map((p: { level: string }) => p.level));
       cursor = page.data.next_cursor;
     }
     expect(cursor).toBeNull();
     expect(found.length).toBeGreaterThan(0);
-    expect(found.every((x) => x === "excluded")).toBe(true);
+    expect(found.every((x) => x === "PC Center of Excellence")).toBe(true);
   }, 60_000);
 
-  it("reports merged duplicate accounts when a Dealer has two accounts in scope", async () => {
+  it("counts two accounts of the same Dealer separately (no merging, no ID repair)", async () => {
     const { port, call } = await handlerWith({});
     const { EDGE } = await import("@/connectors/fixture/adapter");
-    // make sure both the original account and its duplicate are enrolled in course 10
     port.access.get(10)!.set(1000, null);
     port.access.get(10)!.set(EDGE.dupDropped0, null);
-    const res = await call("query_metrics", { course_ids: [10], signals: ["site_last_access"] });
-    expect(res.data.population.dealer_duplicate_accounts_merged).toBe(1);
-    const list = await call("list_people", { course_id: 10, limit: 1 });
-    expect(list.data.population.dealer_duplicate_accounts_merged).toBe(1);
-    expect(list.data.matched_accounts - list.data.matched_people).toBe(1);
+    const list = await call("list_people", { course_id: 10, search: "3210000000" });
+    expect(list.data.matched).toBe(2);
+    expect(list.data.people.map((p: { conso_id: string }) => p.conso_id).sort()).toEqual([
+      "003210000000",
+      "03210000000",
+    ]);
   });
 });
 

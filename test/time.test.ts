@@ -24,14 +24,14 @@ describe("time windows (Asia/Manila)", () => {
     expect(inWindow(null, w)).toBe(false);
   });
 
-  it("since with until today or later is still exact", () => {
-    expect(resolveWindow({ since: "2026-10-01", until: "2026-11-03" }, TZ, NOW)!.semantics).toBe(
+  it("from with to today or later is still exact", () => {
+    expect(resolveWindow({ from: "2026-10-01", to: "2026-11-03" }, TZ, NOW)!.semantics).toBe(
       "accessed_since",
     );
   });
 
   it("a past range is labelled last_access_in_range with an inclusive end date", () => {
-    const w = resolveWindow({ since: "2026-10-01", until: "2026-10-31" }, TZ, NOW)!;
+    const w = resolveWindow({ from: "2026-10-01", to: "2026-10-31" }, TZ, NOW)!;
     expect(w.semantics).toBe("last_access_in_range");
     expect(w.description).toMatch(/NOT/);
     expect(inWindow(startOfDay("2026-10-31", TZ) + 86399, w)).toBe(true);
@@ -40,9 +40,9 @@ describe("time windows (Asia/Manila)", () => {
 
   it("validates combinations", () => {
     expect(resolveWindow({}, TZ, NOW)).toBeNull();
-    expect(() => resolveWindow({ recent_days: 7, since: "2026-10-01" }, TZ, NOW)).toThrow();
-    expect(() => resolveWindow({ until: "2026-10-01" }, TZ, NOW)).toThrow();
-    expect(() => resolveWindow({ since: "2026-10-10", until: "2026-10-01" }, TZ, NOW)).toThrow();
-    expect(() => resolveWindow({ since: "2027-01-01" }, TZ, NOW)).toThrow();
+    expect(() => resolveWindow({ recent_days: 7, from: "2026-10-01" }, TZ, NOW)).toThrow();
+    expect(() => resolveWindow({ to: "2026-10-01" }, TZ, NOW)).toThrow();
+    expect(() => resolveWindow({ from: "2026-10-10", to: "2026-10-01" }, TZ, NOW)).toThrow();
+    expect(() => resolveWindow({ from: "2027-01-01" }, TZ, NOW)).toThrow();
   });
 });

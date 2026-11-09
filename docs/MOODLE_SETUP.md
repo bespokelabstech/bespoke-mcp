@@ -101,8 +101,8 @@ Expect `svc_mcp_readonly` and exactly the functions above (6, or 7 with the grad
 ## 7. Checks after (re)provisioning
 
 1. In Claude: `describe_capabilities` — `lms_configured: true`, `avg_score.available` as expected.
-2. `query_metrics` for one course — `population` shows dealer/legacy/excluded counts and
-   `site_last_access.ever` is not 0 for everyone (otherwise last access is hidden from the role).
+2. `query_metrics` for one course — `population` shows learner accounts / valid dealers and
+   `logged_in.count` is not 0 for everyone (otherwise last access is hidden from the role).
 3. `get_person` for a known tester — `progress_pct` filled for courses they progressed in.
 
 Verified on staging (2026-11-04): opening a course in the **mobile app** does not update

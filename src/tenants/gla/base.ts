@@ -4,6 +4,8 @@ import type { TenantConfigInput } from "../schema";
  * GLA (PC GLASS dealer network on the Bihasa Moodle).
  * Field shortnames verified against the plugin/Go sources — see docs/METRICS.md#gla.
  */
+const DUMMY = "^(?:(\\d)\\1*|(\\d{2,3})\\2+|1{10}\\d{2})$";
+
 export const glaBase: TenantConfigInput = {
   id: "gla",
   displayName: "GLA (PC GLASS)",
@@ -11,7 +13,6 @@ export const glaBase: TenantConfigInput = {
   vocabulary: {
     person: "Dealer",
     personPlural: "Dealers",
-    personKey: "dealer",
     course: "Course",
     coursePlural: "Courses",
   },
@@ -26,31 +27,34 @@ export const glaBase: TenantConfigInput = {
   },
   identity: {
     label: "Conso ID",
+    // bihasa-moodle-go handlers/auth.go: Conso ID == lower-cased Moodle username for app dealers.
     profileField: "dealer_conso_id",
-    // bihasa-moodle-go handlers/auth.go: Conso ID == lower-cased Moodle username, 12 chars.
-    // Sampled on staging: BBBB + 8 digits (BBBB = branch code) and PC alphanumeric variants.
-    validPattern: "^[a-z0-9]{12}$",
-    // Sampled: 11-digit IDs are the same Dealer with the leading zero dropped.
-    padNumericFrom: 11,
-    padNumericTo: 12,
   },
-  eligibility: {
-    requiredCourseRoles: ["student"],
-    legacyLabel: "Legacy",
-    exclude: {
-      usernames: [],
-      usernameRanges: [],
-      courseRoles: ["redemptionmanager"],
-      // Sampled: every staff row (4-digit employee numbers, "pc…" ids) carries this level.
-      staffLevels: ["PC Center of Excellence"],
-      dummyIdentifierPatterns: [
-        "^(\\d)\\1*$", // one digit repeated, any length: 0, 000, 00000, 111111111111
-        // short block repeated to fill the id: 123123123123, 121212121212. Blocks of 4+ are NOT
-        // matched: canonical ids are branch(4) + sequence, e.g. 0001 0001 0001 could be real.
-        "^(\\d{2,3})\\1+$",
-        "^1{10}\\d{2}$", // 1111111111xx test series, e.g. 111111111112
+  // BES-465 base scope: student role and no trainer or admin role, in that course.
+  accounts: {
+    learnerRoles: ["student"],
+    nonLearnerRoles: ["editingteacher", "teacher", "manager", "coursecreator", "redemptionmanager"],
+  },
+  savedFilters: {
+    valid_dealers: {
+      label: "Valid dealers",
+      // Bespoke's starting rules (mvp3 patterns, minus COE, which is a level default) until the
+      // GLA team sends theirs.
+      provisional: true,
+      note: "Provisional rules until the GLA team confirms the list.",
+      reject: [
+        // One digit repeated (0, 000, 111111111111); a 2–3 digit block repeated (123123123123) —
+        // 4+ digit blocks are NOT matched, 0001 0001 0001 could be branch + sequence; the
+        // 1111111111xx test series (also covers the staging UAT pool 111111111119–169).
+        { field: "conso_id", op: "matches", value: DUMMY, label: "Dummy Conso ID" },
+        { field: "username", op: "matches", value: DUMMY, label: "Dummy username" },
       ],
     },
+  },
+  defaults: {
+    savedFilter: "valid_dealers",
+    // BES-465: all levels except PC Center of Excellence (staff), by default.
+    exclude: { level: ["PC Center of Excellence"] },
   },
   courses: {
     includeCategoryIds: [],

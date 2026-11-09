@@ -10,6 +10,7 @@ import type { TenantConfig } from "@/tenants/schema";
 export interface ScopeInput {
   course_ids?: number[] | undefined;
   category_ids?: number[] | undefined;
+  exclude_category_ids?: number[] | undefined;
 }
 
 export async function tenantCourses(port: LearningDataPort, tenant: TenantConfig): Promise<Course[]> {
@@ -41,6 +42,11 @@ export async function resolveCourseScope(
     );
     if (unknown.length) throw new AppError("not_found", `Unknown category id(s): ${unknown.join(", ")}.`);
     courses = courses.filter((c) => inCategories(c, input.category_ids!, byId));
+  }
+  if (input.exclude_category_ids?.length) {
+    const categories = await port.listCategories();
+    const byId = new Map(categories.map((c) => [c.id, c]));
+    courses = courses.filter((c) => !inCategories(c, input.exclude_category_ids!, byId));
   }
   if (input.course_ids?.length) {
     const inScope = new Map(courses.map((c) => [c.id, c]));

@@ -7,9 +7,10 @@ Example: a second Bihasa client on its own Moodle, tenant id `acme`.
 1. Copy `src/tenants/gla/` to `src/tenants/acme/` and edit:
    - `base.ts`: `id`, `displayName`, `timezone`, `vocabulary` (e.g. `Learner`), the three
      `dimensions` (that client's profile field shortnames — verify them in its Moodle under
-     _Users → User profile fields_), `identity` (`validPattern`, optional zero-padding),
-     `eligibility` (`staffLevels`, `dummyIdentifierPatterns`, exclusions — sample real IDs
-     first, as done for GLA), `scoring`, `courses`, `limits`,
+     _Users → User profile fields_), `identity` (label + profile field), `accounts` (learner
+     and non-learner course roles), `savedFilters` (the client's rules over username / ID /
+     name — sample real IDs first, as done for GLA) and `defaults` (default saved filter,
+     default exclude lists), `scoring`, `courses`, `limits`,
      `environments.*.moodleAllowedHosts`.
    - `staging.ts` / `production.ts`: environment-only differences (test accounts, hosts).
 2. Register it in `src/tenants/registry.ts` (`const TENANTS = { gla, acme }`).

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.0 — 2026-11-09
+
+Aligned with BES-465 (definitions `2026-11-mvp4`, see METRICS and ADR-011):
+
+- **Names:** `accessed`, `logged_in` / `last_sign_in`, `progress` (progress, completed, avg.
+  completion), `from`/`to`, `valid_only`, `count_by: accounts`. Tool inputs are strict: old
+  names (`since`, `population`, …) are rejected instead of silently ignored.
+- **Who counts:** base scope = learner accounts (student, no trainer/admin role); saved filter
+  `valid_dealers` (provisional: dummy Conso ID / username) on by default; `PC Center of
+Excellence` excluded by a level default. Statuses dealer/legacy/excluded removed;
+  `population` now reports `learner_accounts`, `valid_dealers`, `not_valid` by rule.
+- **Counting:** every account counts on its own — no duplicate merging, no leading-zero repair,
+  no Conso ID format rule (legacy accounts count unless a rule rejects them).
+- **Filters:** include and exclude lists for region, level, branch; `exclude_category_ids`;
+  `group_by: category`. Defaults returned in `filters.defaults_applied`.
+- **Sort:** `query_metrics` on any column (default `-enrolled`); `list_people` on name, Conso ID,
+  region, branch, level, last sign-in, web course access, progress, accessed (`-` = descending).
+- **Course results:** Logged in and Completed as shares of enrolled, Accessed with access rate
+  (accessed ÷ logged in; `null` with a date range). Avg. completion = completed ÷ enrolled.
+- **Answers in parts:** rows and totals always come with the last part (sortable).
+- `describe_capabilities`: BES-465 glossary word for word with "in this connector" notes,
+  saved filter conditions, defaults, sortable columns, not-available list.
+- `get_person` looks up the username as stored (no repair) and returns `valid` / `not_valid_because`.
+
 ## 0.3.1 — 2026-11-05
 
 - `list_people` `sort: "enrolment_order"` + `cursor`: browse very large courses page by page

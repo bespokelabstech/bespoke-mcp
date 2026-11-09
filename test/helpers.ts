@@ -10,7 +10,6 @@ export function account(over: Partial<AccountInput> & { userId: number }): Accou
     firstName: "Test",
     lastName: String(over.userId),
     profile: {},
-    courseRoles: ["student"],
     ...over,
   };
 }

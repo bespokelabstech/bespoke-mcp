@@ -13,9 +13,10 @@ describe("runtime config guardrails", () => {
     const cfg = parse({});
     expect(cfg.tenant.id).toBe("gla");
     expect(cfg.dataSource.kind).toBe("none");
-    // staging overlay adds the UAT pool, base exclusions survive the merge
-    expect(cfg.tenant.eligibility.exclude.usernameRanges).toEqual([["111111111119", "111111111169"]]);
-    expect(cfg.tenant.eligibility.exclude.courseRoles).toContain("redemptionmanager");
+    // base scope and the default saved filter survive the overlay merge
+    expect(cfg.tenant.accounts.nonLearnerRoles).toContain("redemptionmanager");
+    expect(cfg.tenant.defaults.savedFilter).toBe("valid_dealers");
+    expect(cfg.tenant.defaults.exclude.level).toEqual(["PC Center of Excellence"]);
   });
 
   it("requires a long access key", () => {

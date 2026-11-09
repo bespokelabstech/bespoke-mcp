@@ -14,10 +14,10 @@ import type {
  * No real names or records. Refused on Vercel by the startup guardrails.
  *
  * Mirrors what was sampled on GLA staging (patterns only): canonical Conso IDs
- * (branch code + 8 digits), PC alphanumeric IDs, 11-digit IDs with a dropped leading zero
- * (duplicate accounts), legacy formats, staff at "PC Center of Excellence", dummy IDs, the
- * UAT test series, non-learner roles, region "families" (Visayas vs Visayas 1/2), web course
- * access that the app never updates, and site access that it does.
+ * (branch code + 8 digits), PC alphanumeric IDs, an 11-digit ID with a dropped leading zero
+ * (a second account of the same dealer), legacy formats, staff at "PC Center of Excellence",
+ * dummy IDs, the UAT test series, non-learner roles, region "families" (Visayas vs Visayas 1/2),
+ * web course access that the app never updates, and site access that it does.
  */
 
 const DAY = 86_400;
@@ -71,17 +71,17 @@ export interface FixturePerson {
 
 /** Edge-case accounts with fixed ids, used by tests. */
 export const EDGE = {
-  dealerAlnum: 9001, // valid alphanumeric Conso ID
-  dupDropped0: 9002, // 11-digit duplicate of dealer 1000 (same person)
-  legacyNone: 9003, // no Conso ID, non-Conso username
-  legacyFb: 9004, // "fb 007700901"
-  legacyNl: 9005, // "nl_0999_0007"
-  staff: 9006, // PC Center of Excellence, 4-digit id
-  dummyRepeat: 9007, // 123123123123
-  dummyOnes: 9008, // 111111111111
-  uat: 9009, // username in the staging UAT range
-  teacher: 9010, // editingteacher role
-  manager: 9011, // redemptionmanager role
+  dealerAlnum: 9001, // alphanumeric Conso ID — valid
+  dupDropped0: 9002, // 11-digit second account of dealer 1000 — valid, counts separately
+  legacyNone: 9003, // no Conso ID, non-Conso username — valid (no rule rejects it)
+  legacyFb: 9004, // "fb 007700901" — valid
+  legacyNl: 9005, // "nl_0999_0007" — valid
+  staff: 9006, // PC Center of Excellence, 4-digit id — valid, dropped by the default level exclude
+  dummyRepeat: 9007, // Conso ID 123123123123 — not valid (Dummy Conso ID)
+  dummyOnes: 9008, // Conso ID 111111111111 — not valid (Dummy Conso ID)
+  uat: 9009, // username in the staging UAT range — not valid
+  teacher: 9010, // editingteacher role — outside the base scope
+  manager: 9011, // student + redemptionmanager roles — outside the base scope
 } as const;
 
 export class FixtureLearningAdapter implements LearningDataPort {
@@ -207,7 +207,7 @@ export class FixtureLearningAdapter implements LearningDataPort {
         username: p.username,
         firstName: p.firstName,
         lastName: p.lastName,
-        courseRoles: [p.role],
+        courseRoles: p.role === "redemptionmanager" ? ["student", p.role] : [p.role],
         lastCourseAccess: m.get(p.userId) ?? null,
         lastSiteAccess: p.lastSiteAccess,
       }));

@@ -108,3 +108,37 @@ list, person detail) combined by Claude, instead of one tool per dashboard card/
 
 **Why.** The COE dashboard asks are the test of coverage, not the design. A metric/dimension
 layer serves other clients and questions without new tools.
+
+## ADR-011 — Align names, defaults, filters and sort with BES-465 (2026-11-09)
+
+**Decision.** The connector uses the BES-465 (Compliance Dashboard v2) glossary, filter
+contract, defaults and sort, while still reading Moodle live and never calling the dashboard or
+its API. Supersedes the naming in ADR-007 and the statuses in ADR-008.
+
+- Names: `started` → `accessed`, `site_last_access` → `logged_in` (metric) / `last_sign_in`
+  (column), `completion` → `progress` (progress, completed, avg. completion ÷ enrolled),
+  `since`/`until` → `from`/`to`, `population` → `valid_only`, `count_by: people` → `accounts`.
+  No aliases: tool inputs are strict, so an old argument name fails loudly instead of being
+  silently ignored.
+- Base scope: learner accounts only (student, no trainer/admin role, incl. redemption manager).
+- Saved filter `valid_dealers` in tenant config, on by default; `in`/`not_in`/`matches`/`equals`
+  over identity fields only (username, Conso ID, name). Provisional rules: dummy Conso ID /
+  username patterns.
+- COE is a **level default** (exclude `PC Center of Excellence`), not a saved-filter rule —
+  BES-465 forbids saved-filter conditions on fields that have their own filter.
+- Every account counts on its own: no merging of duplicate accounts and no leading-zero repair.
+  No format rule: legacy/old-format accounts are valid dealers unless a rule rejects them.
+- Include and exclude lists for region, level, branch and category; `group_by` category; sort on
+  any column (rows come with the last part so they can be sorted).
+- `describe_capabilities` carries the glossary word for word, plus an "in this connector" note
+  per term where this connector measures it differently or cannot.
+
+**Why.** People will compare the connector's numbers with the dashboard's. Same labels with
+different rules would make every mismatch look like a bug. Merging and ID repair cannot be
+written in BES-465's filter format, so keeping them would guarantee differences; the business
+also decided Conso IDs are never edited or reinterpreted (2026-11-09).
+
+**Cost.** Valid-dealer totals move versus mvp3: duplicate accounts now count twice, 11-digit and
+legacy-format accounts now count, COE is excluded by a default instead of a status. The known
+gaps (Logged in within past ranges, Accessed within a range, sessions, region source) remain
+until the connector can read BES-465's reporting API (ROADMAP, phase B).

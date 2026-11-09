@@ -20,14 +20,14 @@ Claude (custom connector, x-api-key) ──HTTPS──▶ Vercel: /api/mcp (this
 
 ## Tools
 
-| Tool                    | Answers                                                                                                          |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `describe_capabilities` | What can be answered here: signals, dimensions, populations, limits — with definitions                           |
-| `list_courses`          | Course catalogue (id, name, category, completion tracked)                                                        |
-| `list_dimension_values` | Region / Dealer Level / Branch values as stored, with Dealer counts                                              |
-| `query_metrics`         | Signals (started, completion, app/site access, web access, avg score) × grouping × filters × window × population |
-| `list_people`           | Dealers in a Course: profile values, status, access, progress — filterable                                       |
-| `get_person`            | One Dealer by Conso ID: every Course with started / progress / completion                                        |
+| Tool                    | Answers                                                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------------------------- |
+| `describe_capabilities` | Glossary (BES-465, with connector notes), saved filter, defaults, signals, sortable columns, limits      |
+| `list_courses`          | Course catalogue (id, name, category, completion tracked)                                                |
+| `list_dimension_values` | Region / Dealer Level / Branch values as stored, with account counts                                     |
+| `query_metrics`         | Logged in, Accessed, Access rate, Progress, Completed, web access, avg score × grouping × filters × sort |
+| `list_people`           | Dealers in a Course: profile values, valid or not, last sign-in, progress — filterable and sortable      |
+| `get_person`            | One account by username: every Course with accessed / progress / completed                               |
 
 Metric definitions: [`docs/METRICS.md`](docs/METRICS.md).
 
