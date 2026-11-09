@@ -175,6 +175,8 @@ describe("MoodleLearningAdapter", () => {
         body: [
           {
             id: 1,
+            email: "Someone.Name@Bihasa.PH",
+            suspended: 0,
             customfields: [
               { shortname: "level", value: "Great Life Builder" },
               { shortname: "branch_code", value: " CUBAO (0101) " },
@@ -186,7 +188,14 @@ describe("MoodleLearningAdapter", () => {
     ]);
     const adapter = adapterWith(f.impl);
     const first = await adapter.getProfiles([1, 2, 1]);
-    expect(first.get(1)).toEqual({ level: "Great Life Builder", branch_code: "CUBAO (0101)" });
+    // only the email domain is kept; the address itself never leaves the adapter
+    expect(first.get(1)).toEqual({
+      fields: { level: "Great Life Builder", branch_code: "CUBAO (0101)" },
+      emailDomain: "@bihasa.ph",
+      suspended: false,
+    });
+    expect(JSON.stringify(first.get(1))).not.toMatch(/someone/i);
+    expect(first.get(2)).toEqual({ fields: {}, emailDomain: null, suspended: null });
     expect(decodeURIComponent(f.calls[0]!.body)).toContain("field=id");
     const again = await adapter.getProfiles([2, 1]);
     expect(again.size).toBe(2);

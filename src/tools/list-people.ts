@@ -15,7 +15,7 @@ import type { AccessWindow } from "@/domain/time";
 import { formatInZone, inWindow, resolveWindow } from "@/domain/time";
 import type { Course, LearningDataPort, PersonCourse } from "@/ports/learning";
 import type { TenantConfig } from "@/tenants/schema";
-import { regionSourceNote } from "./notes";
+import { dataWarnings, regionSourceNote } from "./notes";
 import type { ToolDeps } from "./runtime";
 import { READ_ONLY_ANNOTATIONS, requireLearning, runTool } from "./runtime";
 import {
@@ -202,6 +202,12 @@ async function sortedList(c: Ctx, warnings: string[]) {
   const { records, observedRegions } = scope;
   const pop = populationCounts(records, "accounts");
   let selected = selectPopulation(records, c.validOnly);
+  warnings.push(
+    ...dataWarnings(
+      t,
+      selected.map((r) => r.person),
+    ),
+  );
   if (c.filters.include.region?.length) {
     warnings.push(...familyNotes(t.dimensions.region.label, [...observedRegions], c.filters.include.region));
   }

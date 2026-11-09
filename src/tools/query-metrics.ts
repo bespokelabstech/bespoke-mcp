@@ -35,7 +35,7 @@ import type { AccessWindow } from "@/domain/time";
 import { resolveWindow } from "@/domain/time";
 import type { Course, LearningDataPort } from "@/ports/learning";
 import type { TenantConfig } from "@/tenants/schema";
-import { regionSourceNote } from "./notes";
+import { dataWarnings, regionSourceNote } from "./notes";
 import type { ToolDeps } from "./runtime";
 import { READ_ONLY_ANNOTATIONS, remainingBudgetMs, requireLearning, runTool } from "./runtime";
 import {
@@ -543,6 +543,12 @@ function notes(c: RunCtx, selected: EnrolmentRecord[], observed: Set<string>): v
       "No sign-in dates came back at all: the LMS may be hiding last access from the service account.",
     );
   }
+  c.warnings.push(
+    ...dataWarnings(
+      c.t,
+      selected.map((r) => r.person),
+    ),
+  );
   const filterRegions = c.filters.include.region;
   if (!c.groupBy.includes("region") && !filterRegions?.length && !c.filters.exclude.region?.length) return;
   c.warnings.push(regionSourceNote(c.t));

@@ -5,7 +5,7 @@ import { dimensionValue, familyNotes } from "@/domain/people";
 import { loadScope, populationCounts, selectPopulation } from "@/domain/population";
 import { resolveCourseScope } from "@/domain/scope";
 import type { PersonView } from "@/domain/people";
-import { regionSourceNote } from "./notes";
+import { dataWarnings, regionSourceNote } from "./notes";
 import type { ToolDeps } from "./runtime";
 import { READ_ONLY_ANNOTATIONS, requireLearning, runTool } from "./runtime";
 import {
@@ -28,8 +28,8 @@ export function registerListDimensionValues(server: McpServer, deps: ToolDeps): 
       description:
         `List the values of a dimension — region (${d.region.label}), level (${d.level.label}) or branch (${d.branch.label}) — ` +
         `exactly as stored in ${v.person.toLowerCase()} profiles (the system is the source of truth), with the number of ` +
-        `accounts for each (valid dealers only by default). The default exclude list of the listed dimension is not applied, ` +
-        `so every value shows. Call it before filtering so real values are used; for large scopes pass course_ids.`,
+        `accounts for each (valid dealers only by default, so values only hidden accounts have — e.g. PC Center of Excellence — ` +
+        `do not show unless valid_only=false). Call it before filtering so real values are used; for large scopes pass course_ids.`,
       inputSchema: z.strictObject({
         dimension: z.enum(["region", "level", "branch"]),
         ...scopeFields(t),
@@ -44,7 +44,7 @@ export function registerListDimensionValues(server: McpServer, deps: ToolDeps): 
       runTool("list_dimension_values", deps, args, async () => {
         const port = requireLearning(deps);
         const courses = await resolveCourseScope(port, t, args);
-        const resolved = resolveFilters(args, t, args.dimension);
+        const resolved = resolveFilters(args, t);
         const { records } = await loadScope(port, t, courses, resolved.filters);
         const pop = populationCounts(records, "accounts");
         const selected = selectPopulation(records, resolved.validOnly);
@@ -76,6 +76,10 @@ export function registerListDimensionValues(server: McpServer, deps: ToolDeps): 
           filters: resolved.applied,
           warnings: [
             ...(args.dimension === "region" ? [regionSourceNote(t)] : []),
+            ...dataWarnings(
+              t,
+              selected.map((r) => r.person),
+            ),
             ...familyNotes(
               d[args.dimension].label,
               values.map((x) => x.value),

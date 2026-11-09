@@ -7,7 +7,7 @@ import type { Condition, DimensionId, SavedFilterField, TenantConfig } from "@/t
  * identifiers are never repaired.
  *
  * Attribute values are taken VERBATIM from the profile (the LMS profile is the source of
- * truth). Empty values become the tenant's emptyValueLabel ("N/A").
+ * truth). Empty values become the tenant's emptyValueLabel (GLA: "Not set").
  */
 
 export interface BranchValue {
@@ -26,10 +26,13 @@ export interface PersonView {
   region: string;
   level: string;
   branch: BranchValue;
-  /** Passes the tenant's default saved filter (true when none is configured). */
+  /** Not hidden by the tenant's default saved filter (true when none is configured). */
   valid: boolean;
-  /** Labels of the saved-filter conditions this account fails, in config order. */
+  /** Labels of the saved-filter rules that hide this account, in config order, de-duplicated. */
   failed: string[];
+  /** Whether the LMS showed an email domain / suspension flag (rules on them need it). */
+  emailKnown: boolean;
+  statusKnown: boolean;
 }
 
 export interface AccountInput {
@@ -37,7 +40,11 @@ export interface AccountInput {
   username: string;
   firstName: string;
   lastName: string;
+  /** Custom profile fields (shortname -> raw value). */
   profile: Record<string, string>;
+  /** "@domain" of the email; null/omitted when not shown. */
+  emailDomain?: string | null | undefined;
+  suspended?: boolean | null | undefined;
 }
 
 const LABEL_RE = /^(.*) \(([0-9A-Za-z]+)\)$/; // mirrors local_profileform catalog::LABEL_RE
@@ -59,7 +66,7 @@ interface CompiledCondition {
 }
 interface Compiled {
   placeholders: Set<string>;
-  filter: { require: CompiledCondition[]; reject: CompiledCondition[] } | null;
+  hide: CompiledCondition[] | null;
 }
 const compiled = new WeakMap<TenantConfig, Compiled>();
 
@@ -87,21 +94,26 @@ function rules(t: TenantConfig): Compiled {
     const def = t.defaults.savedFilter ? t.savedFilters[t.defaults.savedFilter] : undefined;
     r = {
       placeholders: new Set(t.placeholderValues.map(norm)),
-      filter: def
-        ? { require: def.require.map(compileCondition), reject: def.reject.map(compileCondition) }
-        : null,
+      hide: def ? def.hide.map(compileCondition) : null,
     };
     compiled.set(t, r);
   }
   return r;
 }
 
-/** Saved-filter field values: trimmed and lower-cased; an empty identifier is "". */
-function fieldValues(a: AccountInput, identifier: string | null): Record<SavedFilterField, string> {
+/** Saved-filter field values (see SAVED_FILTER_FIELDS): trimmed and lower-cased. */
+function fieldValues(
+  a: AccountInput,
+  identifier: string | null,
+  level: string,
+): Record<SavedFilterField, string> {
   return {
     username: norm(a.username),
     conso_id: norm(identifier ?? ""),
-    name: norm(`${a.firstName} ${a.lastName}`),
+    name: norm(`${a.firstName} ${a.lastName}`).replace(/\s+/g, " "),
+    email: norm(a.emailDomain ?? ""),
+    status: a.suspended === true ? "suspended" : a.suspended === false ? "active" : "",
+    level: norm(level),
   };
 }
 
@@ -116,11 +128,13 @@ export function classify(a: AccountInput, tenant: TenantConfig): PersonView {
     return r.placeholders.has(v.toLowerCase()) ? "" : v;
   };
   const identifier = raw(tenant.identity.profileField) || null;
+  const level = raw(d.level.profileField);
   const failed: string[] = [];
-  if (r.filter) {
-    const values = fieldValues(a, identifier);
-    for (const x of r.filter.require) if (!x.test(values[x.c.field])) failed.push(x.c.label);
-    for (const x of r.filter.reject) if (x.test(values[x.c.field])) failed.push(x.c.label);
+  if (r.hide) {
+    const values = fieldValues(a, identifier, level);
+    for (const x of r.hide) {
+      if (x.test(values[x.c.field]) && !failed.includes(x.c.label)) failed.push(x.c.label);
+    }
   }
   return {
     userId: a.userId,
@@ -128,10 +142,12 @@ export function classify(a: AccountInput, tenant: TenantConfig): PersonView {
     identifier,
     name: `${a.firstName} ${a.lastName}`.trim(),
     region: raw(d.region.profileField) || empty,
-    level: raw(d.level.profileField) || empty,
+    level: level || empty,
     branch: parseBranch(raw(d.branch.profileField), d.branch.format, empty),
     valid: failed.length === 0,
     failed,
+    emailKnown: Boolean(a.emailDomain),
+    statusKnown: a.suspended === true || a.suspended === false,
   };
 }
 

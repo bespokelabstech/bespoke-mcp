@@ -44,7 +44,7 @@ export function registerGetPerson(server: McpServer, deps: ToolDeps): void {
             `No account with username "${args.identifier}". Older accounts may use a different username — try list_people with 'search'.`,
           );
         }
-        const view = classify(record, t);
+        const view = classify({ ...record, profile: record.fields }, t);
         const [enrolments, scope] = await Promise.all([
           port.listPersonCourses(record.userId),
           tenantCourses(port, t),

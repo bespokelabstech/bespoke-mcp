@@ -28,9 +28,11 @@ export const GLOSSARY: GlossaryEntry[] = [
   },
   {
     label: "Valid dealer",
-    meaning: "Matches the `valid_dealers` saved filter (rules from the GLA team)",
-    availability: "exact",
-    in_this_connector: "Rules are provisional until the GLA team confirms them; see saved_filters.",
+    meaning:
+      "Not hidden by the `valid_dealers` saved filter (rules below). This includes being one of the 4 dealer levels.",
+    availability: "approximate",
+    in_this_connector:
+      "Same 7 rules, written as patterns by Bespoke (pending confirmation from Jona); see saved_filters. The email rule needs the LMS to show email addresses to the service account, and a warning says when it does not. Rule 7 hides PC Center of Excellence and blank levels; any other unexpected level value is flagged in a warning.",
   },
   {
     label: "Enrolled",
@@ -96,7 +98,7 @@ export const GLOSSARY: GlossaryEntry[] = [
     meaning: "Region is taken from the dealer's branch in Branches & Regions.",
     availability: "different_source",
     in_this_connector:
-      "Uses the Region value stored on the dealer's profile, which can differ from the branch's region in Branches & Regions.",
+      "Uses the Region value stored on the dealer's profile, which can differ from the branch's region in Branches & Regions. Empty values show as \"Not set\".",
   },
 ];
 

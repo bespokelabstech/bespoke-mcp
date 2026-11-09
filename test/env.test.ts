@@ -16,7 +16,7 @@ describe("runtime config guardrails", () => {
     // base scope and the default saved filter survive the overlay merge
     expect(cfg.tenant.accounts.nonLearnerRoles).toContain("redemptionmanager");
     expect(cfg.tenant.defaults.savedFilter).toBe("valid_dealers");
-    expect(cfg.tenant.defaults.exclude.level).toEqual(["PC Center of Excellence"]);
+    expect(cfg.tenant.savedFilters.valid_dealers!.hide.length).toBeGreaterThan(0);
   });
 
   it("requires a long access key", () => {

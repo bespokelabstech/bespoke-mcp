@@ -8,7 +8,7 @@ import type { ToolDeps } from "@/tools/runtime";
 import type { TenantConfig } from "@/tenants/schema";
 import type { RuntimeConfig } from "./env";
 
-export const SERVER_INFO = { name: "bespoke-mcp", version: "0.4.0" };
+export const SERVER_INFO = { name: "bespoke-mcp", version: "0.5.0" };
 
 /** Build the learning port selected by the runtime config. One instance per server instance. */
 export function buildLearningPort(cfg: RuntimeConfig): LearningDataPort | null {
@@ -34,7 +34,7 @@ export function buildInstructions(t: TenantConfig, env: string): string {
     `Read-only access to ${t.displayName} learning data (${env}), pulled live from the LMS.`,
     `Say "${v.person}" for people and "${v.course}" for courses. Labels (Enrolled, Logged in, Accessed, Access rate, Progress, Completed, Avg. completion) mean what the dashboard glossary says — see describe_capabilities, including its "in_this_connector" notes where this connector differs.`,
     sf
-      ? `By default only ${sf.label} are counted (saved filter "${t.defaults.savedFilter}"${sf.provisional ? ", provisional rules" : ""}) and the default exclude lists apply; say so, and use valid_only=false and empty exclude lists when asked for all accounts. Every account counts on its own.`
+      ? `By default only ${sf.label} are counted (saved filter "${t.defaults.savedFilter}"${sf.provisional ? ", provisional rules" : ""}); say so, and use valid_only=false when asked for all accounts. Every account counts on its own.`
       : "Every learner account is counted; each account counts on its own.",
     `Every number is computed by the server: report it exactly, never estimate, recompute or fill in values the server did not return (e.g. a null name).`,
     `"accessed" (completed at least one activity; sees app use) is the per-course engagement measure and is all-time only; "logged_in" uses the last sign-in; "web_course_access" is web-only and misses the mobile app — never present it as course access.`,

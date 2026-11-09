@@ -2,6 +2,7 @@ import { TtlCache } from "@/core/cache";
 import { mapLimit } from "@/core/concurrency";
 import type { MoodleSettings } from "@/core/env";
 import type {
+  AccountProfile,
   Category,
   Course,
   Enrolment,
@@ -128,8 +129,6 @@ export class MoodleLearningAdapter implements LearningDataPort {
         enrolledUsersSchema,
       );
       const rows = page.map((u) => {
-        // Profiles may arrive with the enrolment on older call shapes; reuse them if so.
-        if (u.customfields) this.cache.set(`profile:${u.id}`, Promise.resolve(profileMap(u.customfields)));
         return {
           userId: u.id,
           username: u.username ?? "",
@@ -144,11 +143,11 @@ export class MoodleLearningAdapter implements LearningDataPort {
     });
   }
 
-  async getProfiles(userIds: number[]): Promise<Map<number, Record<string, string>>> {
-    const out = new Map<number, Record<string, string>>();
+  async getProfiles(userIds: number[]): Promise<Map<number, AccountProfile>> {
+    const out = new Map<number, AccountProfile>();
     const missing: number[] = [];
     for (const id of new Set(userIds)) {
-      const hit = this.cache.peek<Record<string, string>>(`profile:${id}`);
+      const hit = this.cache.peek<AccountProfile>(`profile:${id}`);
       if (hit) out.set(id, await hit);
       else missing.push(id);
     }
@@ -161,7 +160,7 @@ export class MoodleLearningAdapter implements LearningDataPort {
         usersByFieldSchema,
       );
       for (const u of rows) {
-        const profile = profileMap(u.customfields);
+        const profile = accountProfile(u);
         out.set(u.id, profile);
         this.cache.set(`profile:${u.id}`, Promise.resolve(profile));
       }
@@ -182,8 +181,7 @@ export class MoodleLearningAdapter implements LearningDataPort {
       username: u.username ?? username,
       firstName: text(u.firstname),
       lastName: text(u.lastname),
-      profile: profileMap(u.customfields),
-      suspended: u.suspended === undefined || u.suspended === null ? null : Boolean(u.suspended),
+      ...accountProfile(u),
       lastSiteAccess: positiveOrNull(u.lastaccess),
     };
   }
@@ -221,6 +219,29 @@ export class MoodleLearningAdapter implements LearningDataPort {
       }));
     });
   }
+}
+
+function accountProfile(u: {
+  customfields?: RawCustomFields;
+  email?: string | null | undefined;
+  suspended?: boolean | number | null | undefined;
+}): AccountProfile {
+  return {
+    fields: profileMap(u.customfields),
+    emailDomain: emailDomain(u.email),
+    suspended: u.suspended === undefined || u.suspended === null ? null : Boolean(u.suspended),
+  };
+}
+
+/** "@domain" of an address, lower-cased; the local part is discarded here and never stored. */
+export function emailDomain(email: string | null | undefined): string | null {
+  const at = email?.lastIndexOf("@") ?? -1;
+  if (!email || at < 0) return null;
+  const domain = email
+    .slice(at + 1)
+    .trim()
+    .toLowerCase();
+  return domain ? `@${domain}` : null;
 }
 
 function profileMap(fields: RawCustomFields): Record<string, string> {

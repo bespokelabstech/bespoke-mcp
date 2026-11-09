@@ -26,19 +26,19 @@ team mailbox. No course enrolments.
 _Users → Permissions → Define roles → Add_: context type **System**, archetype none.
 Allow only:
 
-| Capability                                       | Why                                                                                 |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| `webservice/rest:use`                            | Call the REST protocol                                                              |
-| `moodle/course:view`                             | Access courses without being enrolled                                               |
-| `moodle/course:viewparticipants`                 | `core_enrol_get_enrolled_users`, `core_enrol_get_users_courses`                     |
-| `moodle/course:enrolreview`                      | `onlyactive` option                                                                 |
-| `moodle/site:accessallgroups`                    | Courses in separate-groups mode                                                     |
-| `moodle/user:viewdetails`                        | Profile fields of other users                                                       |
-| `moodle/user:viewalldetails`                     | **[verify]** username / non-public profile fields                                   |
-| `moodle/course:viewhiddenuserfields`             | Last-access when hidden by `hiddenuserfields`                                       |
-| `moodle/category:viewhiddencategories`           | Category names when courses sit in hidden categories (staging: categories 3, 7)     |
-| `report/progress:view`, `report/completion:view` | Others' progress/completion in `core_enrol_get_users_courses` (verified on staging) |
-| `gradereport/user:view`, `moodle/grade:viewall`  | Optional: quiz grades for `avg_score`                                               |
+| Capability                                       | Why                                                                                                                                 |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `webservice/rest:use`                            | Call the REST protocol                                                                                                              |
+| `moodle/course:view`                             | Access courses without being enrolled                                                                                               |
+| `moodle/course:viewparticipants`                 | `core_enrol_get_enrolled_users`, `core_enrol_get_users_courses`                                                                     |
+| `moodle/course:enrolreview`                      | `onlyactive` option                                                                                                                 |
+| `moodle/site:accessallgroups`                    | Courses in separate-groups mode                                                                                                     |
+| `moodle/user:viewdetails`                        | Profile fields of other users                                                                                                       |
+| `moodle/user:viewalldetails`                     | **[verify]** username / non-public profile fields; **email** for the internal-domain rule (only the domain is kept) and `suspended` |
+| `moodle/course:viewhiddenuserfields`             | Last-access when hidden by `hiddenuserfields`                                                                                       |
+| `moodle/category:viewhiddencategories`           | Category names when courses sit in hidden categories (staging: categories 3, 7)                                                     |
+| `report/progress:view`, `report/completion:view` | Others' progress/completion in `core_enrol_get_users_courses` (verified on staging)                                                 |
+| `gradereport/user:view`, `moodle/grade:viewall`  | Optional: quiz grades for `avg_score`                                                                                               |
 
 Assign the role to `svc_mcp_readonly` at system level (_Assign system roles_).
 
@@ -103,6 +103,8 @@ Expect `svc_mcp_readonly` and exactly the functions above (6, or 7 with the grad
 1. In Claude: `describe_capabilities` — `lms_configured: true`, `avg_score.available` as expected.
 2. `query_metrics` for one course — `population` shows learner accounts / valid dealers and
    `logged_in.count` is not 0 for everyone (otherwise last access is hidden from the role).
+   No warning "Email addresses are not visible" — otherwise the role cannot see emails, and the
+   internal-domain rule of `valid_dealers` does not apply.
 3. `get_person` for a known tester — `progress_pct` filled for courses they progressed in.
 
 Verified on staging (2026-11-04): opening a course in the **mobile app** does not update

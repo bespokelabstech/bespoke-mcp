@@ -42,14 +42,25 @@ export interface Enrolment {
   lastSiteAccess: number | null;
 }
 
+/**
+ * Account details beyond the enrolment: custom profile fields plus what saved filters need.
+ * The email address itself never crosses the port — only its domain.
+ */
+export interface AccountProfile {
+  /** Custom profile fields (shortname -> raw value). */
+  fields: Record<string, string>;
+  /** "@domain" of the account's email, lower-cased; null when the LMS does not show it. */
+  emailDomain: string | null;
+  /** Account suspended in the LMS; null when not shown. */
+  suspended: boolean | null;
+}
+
 /** A person looked up directly (not through a course). */
-export interface PersonRecord {
+export interface PersonRecord extends AccountProfile {
   userId: number;
   username: string;
   firstName: string;
   lastName: string;
-  profile: Record<string, string>;
-  suspended: boolean | null;
   lastSiteAccess: number | null;
 }
 
@@ -91,8 +102,8 @@ export interface LearningDataPort {
     offset: number,
     limit: number,
   ): Promise<{ rows: Enrolment[]; done: boolean }>;
-  /** Custom profile fields (shortname -> raw value) for these users. Users not visible are omitted. */
-  getProfiles(userIds: number[]): Promise<Map<number, Record<string, string>>>;
+  /** Profile fields, email domain and suspension for these users. Users not visible are omitted. */
+  getProfiles(userIds: number[]): Promise<Map<number, AccountProfile>>;
   findPersonByUsername(username: string): Promise<PersonRecord | null>;
   listPersonCourses(userId: number): Promise<PersonCourse[]>;
   /** Grades of every enrolled user in one course. Only when capabilities().grades. */

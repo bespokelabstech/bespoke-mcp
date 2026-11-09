@@ -104,20 +104,20 @@ describe("POST /api/mcp", () => {
     const web = payload.signals.find((s: { id: string }) => s.id === "web_course_access");
     expect(web.sees_app_activity).toBe(false);
     expect(payload.signals.find((s: { id: string }) => s.id === "avg_score").available).toBe(true);
-    const labels = payload.glossary.terms.map((g: { label: string }) => g.label);
-    expect(labels).toEqual(
-      expect.arrayContaining(["Logged in", "Accessed", "Access rate", "Completed / Avg. completion"]),
-    );
-    const loggedIn = payload.glossary.terms.find((g: { label: string }) => g.label === "Logged in");
-    expect(loggedIn.meaning).toBe(
+    const term = (label: string) => payload.glossary.terms.find((g: { label: string }) => g.label === label);
+    expect(term("Logged in").meaning).toBe(
       "Signed in to the app at least once. Within a date range: had a session in the range.",
     );
-    expect(loggedIn.in_this_connector).toMatch(/last sign-in/);
-    expect(payload.saved_filters.valid_dealers.provisional).toBe(true);
-    expect(payload.defaults).toMatchObject({
-      valid_only: true,
-      exclude: { level: ["PC Center of Excellence"] },
-    });
+    expect(term("Logged in").in_this_connector).toMatch(/last sign-in/);
+    expect(term("Valid dealer").meaning).toBe(
+      "Not hidden by the `valid_dealers` saved filter (rules below). This includes being one of the 4 dealer levels.",
+    );
+    const sf = payload.saved_filters.valid_dealers;
+    expect(sf.provisional).toBe(true);
+    expect(new Set(sf.hide.map((c: { field: string }) => c.field))).toEqual(
+      new Set(["email", "username", "name", "status", "level"]),
+    );
+    expect(payload.defaults).toMatchObject({ valid_only: true, saved_filter: "valid_dealers" });
   });
 
   it("list_courses hides invisible courses and flags unnamed categories", async () => {
@@ -127,7 +127,7 @@ describe("POST /api/mcp", () => {
     expect(payload.diagnostics.ms).toBeGreaterThanOrEqual(0);
   });
 
-  it("query_metrics: valid dealers and the default level exclude by default, with population counts", async () => {
+  it("query_metrics: valid dealers by default, with population counts by rule", async () => {
     const { result, payload } = await callTool(POST, "query_metrics", {
       course_ids: [10, 11],
       group_by: ["region"],
@@ -135,38 +135,75 @@ describe("POST /api/mcp", () => {
     });
     expect(result.isError).toBeFalsy();
     expect(payload.data.complete).toBe(true);
-    expect(payload.data.population).toMatchObject({
-      not_valid: { "Dummy Conso ID": 3 },
-      counted: "valid_dealers",
+    const pop = payload.data.population;
+    expect(pop.counted).toBe("valid_dealers");
+    expect(pop.not_valid).toMatchObject({
+      "Internal email domain": 1,
+      "Suspended account": 1,
+      "Dummy Conso ID": 1,
     });
-    expect(payload.data.population.learner_accounts - payload.data.population.valid_dealers).toBe(3);
-    expect(payload.filters).toMatchObject({
-      saved_filter: "valid_dealers",
-      defaults_applied: ["exclude.level"],
-    });
-    expect(payload.data.totals.enrolled).toBe(payload.data.population.valid_dealers);
+    const hidden = Object.values(pop.not_valid as Record<string, number>).reduce((a, b) => a + b, 0);
+    expect(pop.learner_accounts - pop.valid_dealers).toBe(hidden);
+    expect(payload.filters).toEqual({ saved_filter: "valid_dealers" }); // no other defaults
+    expect(payload.data.totals.enrolled).toBe(pop.valid_dealers);
     expect(payload.data.totals.accessed.unknown).toBe(0);
     // Accessed is all-time: with a date range the access rate is not computed, and a warning says so
     expect(payload.data.totals.accessed.access_rate_pct).toBeNull();
-    expect(payload.warnings.join(" ")).toMatch(/All-time only/);
-    expect(payload.warnings.join(" ")).toMatch(/stored on each profile/);
+    const w = payload.warnings.join(" ");
+    expect(w).toMatch(/All-time only/);
+    expect(w).toMatch(/stored on each profile/);
+    expect(w).not.toMatch(/not visible|Unexpected/);
     const sum = payload.data.rows.reduce((n: number, r: { enrolled: number }) => n + r.enrolled, 0);
     expect(sum).toBe(payload.data.totals.enrolled);
-    expect(payload.warnings.join(" ")).toMatch(/"Visayas", "Visayas 1", "Visayas 2" are separate values/);
+    expect(w).toMatch(/"Visayas", "Visayas 1", "Visayas 2" are separate values/);
   });
 
-  it("query_metrics: all accounts on request (valid_only=false, empty level exclude)", async () => {
+  it("query_metrics: all accounts on request (valid_only=false), COE included", async () => {
     const args = { course_ids: [10], signals: ["logged_in"] };
     const only = await callTool(POST, "query_metrics", args);
     const all = await callTool(POST, "query_metrics", { ...args, valid_only: false });
-    const everything = await callTool(POST, "query_metrics", {
+    const pop = only.payload.data.population;
+    expect(all.payload.data.totals.enrolled).toBe(pop.learner_accounts);
+    expect(all.payload.data.totals.enrolled - only.payload.data.totals.enrolled).toBe(
+      pop.learner_accounts - pop.valid_dealers,
+    );
+    expect(all.payload.data.population.counted).toBe("all");
+    const coe = await callTool(POST, "query_metrics", {
       ...args,
       valid_only: false,
-      exclude: { level: [] },
+      filters: { level: ["PC Center of Excellence"] },
     });
-    expect(all.payload.data.totals.enrolled).toBe(only.payload.data.totals.enrolled + 3);
-    expect(everything.payload.data.totals.enrolled).toBe(all.payload.data.totals.enrolled + 1); // the COE account
-    expect(everything.payload.data.population.counted).toBe("all");
+    expect(coe.payload.data.totals.enrolled).toBe(1);
+  });
+
+  it("warns when the LMS hides email addresses, and flags unexpected Dealer Levels", async () => {
+    const { buildMcpHandler } = await import("@/core/server");
+    const { loadTenant } = await import("@/tenants/registry");
+    const { FixtureLearningAdapter, EDGE } = await import("@/connectors/fixture/adapter");
+    const port = new FixtureLearningAdapter({ nowSec: Math.floor(Date.now() / 1000) });
+    for (const p of port.people) p.emailDomain = null;
+    port.people.find((p) => p.userId === EDGE.dealerAlnum)!.profile.level = "Head Office";
+    const h = buildMcpHandler(
+      {
+        tenant: loadTenant("gla", "staging"),
+        env: "staging",
+        accessKeys: [KEY],
+        dataSource: { kind: "none" },
+      },
+      port,
+    );
+    const body = await rpcBody(
+      await h(
+        rpc("tools/call", {
+          name: "query_metrics",
+          arguments: { course_ids: [10], signals: ["logged_in"] },
+        }),
+      ),
+    );
+    const out = JSON.parse((body.result as { content: Array<{ text: string }> }).content[0]!.text);
+    const w = out.warnings.join(" ");
+    expect(w).toMatch(/Email addresses are not visible .*"Internal email domain" was not applied/);
+    expect(w).toMatch(/Unexpected Dealer Level value\(s\) "Head Office"/);
   });
 
   it("query_metrics: sorts on any column and checks the column's metric was asked for", async () => {
@@ -225,7 +262,7 @@ describe("POST /api/mcp", () => {
     expect(payload.warnings.join(" ")).toMatch(/Web only/);
   });
 
-  it("list_people: who has not accessed, accounts failing the saved filter, sorting", async () => {
+  it("list_people: who has not accessed, accounts hidden by the saved filter, sorting", async () => {
     const notAccessed = await callTool(POST, "list_people", {
       course_id: 10,
       where: { signal: "accessed", state: "no" },
@@ -234,19 +271,17 @@ describe("POST /api/mcp", () => {
     expect(notAccessed.payload.data.people.every((p: { accessed: boolean }) => p.accessed === false)).toBe(
       true,
     );
-    const all = await callTool(POST, "list_people", {
-      course_id: 10,
-      valid_only: false,
-      limit: 100,
-      sort: "-conso_id",
-    });
-    const failing = all.payload.data.people.filter((p: { valid: boolean }) => !p.valid);
-    expect(failing.map((p: { conso_id: string }) => p.conso_id).sort()).toEqual([
-      "111111111111",
-      "111111111125",
-      "123123123123",
-    ]);
-    expect(failing.every((p: { not_valid_because: string[] }) => p.not_valid_because.length > 0)).toBe(true);
+    const rows: Array<{ valid: boolean; not_valid_because?: string[] }> = [];
+    let all;
+    for (let offset: number | null = 0; offset !== null; offset = all.payload.data.next_offset) {
+      all = await callTool(POST, "list_people", { course_id: 10, valid_only: false, limit: 100, offset });
+      rows.push(...all.payload.data.people);
+    }
+    const failing = rows.filter((p) => !p.valid);
+    const pop = all!.payload.data.population;
+    expect(failing.length).toBe(pop.learner_accounts - pop.valid_dealers);
+    expect(failing.every((p) => (p.not_valid_because ?? []).length > 0)).toBe(true);
+    expect(JSON.stringify(all!.payload)).not.toMatch(/@example\.com|@bihasa/); // email domains are never returned
     const bySignIn = await callTool(POST, "list_people", {
       course_id: 10,
       sort: "-last_sign_in",
@@ -259,11 +294,14 @@ describe("POST /api/mcp", () => {
     expect(bySignIn.payload.data.people.at(-1).last_sign_in).toBeNull(); // nulls last
   });
 
-  it("get_person: looks up the username as stored (no repair)", async () => {
+  it("get_person: looks up the username as stored (no repair) and says which rules hide it", async () => {
     const { payload } = await callTool(POST, "get_person", { identifier: "003210000000" });
     expect(payload.data.person.conso_id).toBe("003210000000");
-    expect(payload.data.person.valid).toBe(true);
+    expect(payload.data.person.valid).toBe(false); // the fixture's first dealer has a blank level
+    expect(payload.data.person.not_valid_because).toEqual(["COE or blank Dealer Level"]);
     expect(payload.data.courses.length).toBeGreaterThan(0);
+    const ok = await callTool(POST, "get_person", { identifier: "500000J99901" });
+    expect(ok.payload.data.person.valid).toBe(true);
     const dropped = await callTool(POST, "get_person", { identifier: "03210000000" });
     expect(dropped.payload.error.code).toBe("not_found");
   });
@@ -519,7 +557,12 @@ describe("list_people paging and population details", () => {
     });
     // the one COE account is rare in the fixture and sits at the end of the enrolment order
     const coe = { level: ["PC Center of Excellence"] };
-    const first = await call("list_people", { course_id: 10, sort: "enrolment_order", filters: coe });
+    const first = await call("list_people", {
+      course_id: 10,
+      sort: "enrolment_order",
+      filters: coe,
+      valid_only: false,
+    });
     expect(first.error).toBeUndefined();
     expect(first.data.next_cursor).toMatch(/^\d+:\d+$/);
     const found: string[] = [...first.data.people.map((p: { level: string }) => p.level)];
@@ -529,6 +572,7 @@ describe("list_people paging and population details", () => {
         course_id: 10,
         sort: "enrolment_order",
         filters: coe,
+        valid_only: false,
         cursor,
       });
       found.push(...page.data.people.map((p: { level: string }) => p.level));
@@ -544,7 +588,7 @@ describe("list_people paging and population details", () => {
     const { EDGE } = await import("@/connectors/fixture/adapter");
     port.access.get(10)!.set(1000, null);
     port.access.get(10)!.set(EDGE.dupDropped0, null);
-    const list = await call("list_people", { course_id: 10, search: "3210000000" });
+    const list = await call("list_people", { course_id: 10, search: "3210000000", valid_only: false });
     expect(list.data.matched).toBe(2);
     expect(list.data.people.map((p: { conso_id: string }) => p.conso_id).sort()).toEqual([
       "003210000000",

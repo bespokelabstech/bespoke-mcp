@@ -58,6 +58,8 @@ export const usersByFieldSchema = z.array(
     username: z.string().nullish(),
     firstname: z.string().nullish(),
     lastname: z.string().nullish(),
+    /** Read only to derive the domain; the address itself is dropped in the adapter. */
+    email: z.string().nullish(),
     suspended: z.union([z.boolean(), num]).nullish(),
     lastaccess: optNum,
     customfields: customFields,

@@ -2,8 +2,7 @@ import { z } from "zod";
 import type { DimensionValues, Filters } from "@/domain/people";
 import type { PopulationCounts } from "@/domain/population";
 import { SIGNAL_IDS } from "@/domain/signals";
-import type { DimensionId, TenantConfig } from "@/tenants/schema";
-import { DIMENSION_IDS } from "@/tenants/schema";
+import type { TenantConfig } from "@/tenants/schema";
 
 /**
  * Input fragments shared by several tools — one filter contract (same names, defaults and
@@ -60,19 +59,9 @@ export function filtersField(t: TenantConfig) {
 }
 
 export function excludeField(t: TenantConfig) {
-  const defaults = defaultExcludes(t);
-  const note = defaults.length
-    ? ` Default when you set neither filters nor exclude for that dimension: ${defaults.join("; ")}. Pass an empty list (e.g. level: []) to include them.`
-    : "";
   return dimensionLists(t, "drop")
     .optional()
-    .describe(`Exclude lists: drop accounts with these profile values.${note}`);
-}
-
-function defaultExcludes(t: TenantConfig): string[] {
-  return DIMENSION_IDS.filter((dim) => t.defaults.exclude[dim].length).map(
-    (dim) => `${t.dimensions[dim].label} not ${t.defaults.exclude[dim].map((v) => `"${v}"`).join(", ")}`,
-  );
+    .describe("Exclude lists: drop accounts with these profile values. Default: none (all values).");
 }
 
 export function validOnlyField(t: TenantConfig) {
@@ -83,7 +72,7 @@ export function validOnlyField(t: TenantConfig) {
     .describe(
       f
         ? `true (default) = only ${f.label} (the "${t.defaults.savedFilter}" saved filter; see describe_capabilities). ` +
-            `false = every learner account, including accounts that fail it (e.g. dummy IDs).`
+            `false = every learner account, including accounts it hides (e.g. test, internal, COE or suspended accounts).`
         : "No saved filter is configured for this deployment: every learner account is counted.",
     );
 }
@@ -146,29 +135,16 @@ export interface ResolvedFilters {
 }
 
 /**
- * Apply defaults: the saved filter is on unless valid_only=false; a dimension's default exclude
- * list applies only when the caller set neither an include nor an exclude list for it.
- * `listing` = the dimension whose values are being listed (its default is not applied).
+ * Apply defaults (BES-465): the saved filter is on unless valid_only=false; every other filter
+ * is "all" unless the caller sets it.
  */
-export function resolveFilters(args: FilterArgs, t: TenantConfig, listing?: DimensionId): ResolvedFilters {
-  const exclude: DimensionValues = {};
-  const defaultsApplied: string[] = [];
-  for (const dim of DIMENSION_IDS) {
-    const given = args.exclude?.[dim];
-    if (given !== undefined) exclude[dim] = given;
-    else if (!args.filters?.[dim]?.length && dim !== listing && t.defaults.exclude[dim].length) {
-      exclude[dim] = t.defaults.exclude[dim];
-      defaultsApplied.push(`exclude.${dim}`);
-    }
-  }
+export function resolveFilters(args: FilterArgs, t: TenantConfig): ResolvedFilters {
   const sf = savedFilter(t);
   const validOnly = sf !== null && args.valid_only !== false;
-  const include = Object.fromEntries(
-    Object.entries(args.filters ?? {}).filter(([, v]) => v && v.length),
-  ) as DimensionValues;
-  const nonEmptyExclude = Object.fromEntries(
-    Object.entries(exclude).filter(([, v]) => v && v.length),
-  ) as DimensionValues;
+  const nonEmpty = (v: DimensionValues | undefined) =>
+    Object.fromEntries(Object.entries(v ?? {}).filter(([, x]) => x && x.length)) as DimensionValues;
+  const include = nonEmpty(args.filters);
+  const nonEmptyExclude = nonEmpty(args.exclude);
   return {
     filters: { include, exclude: nonEmptyExclude },
     validOnly,
@@ -178,7 +154,6 @@ export function resolveFilters(args: FilterArgs, t: TenantConfig, listing?: Dime
       ...(Object.keys(nonEmptyExclude).length ? { exclude: nonEmptyExclude } : {}),
       ...(args.category_ids?.length ? { category_ids: args.category_ids } : {}),
       ...(args.exclude_category_ids?.length ? { exclude_category_ids: args.exclude_category_ids } : {}),
-      ...(defaultsApplied.length ? { defaults_applied: defaultsApplied } : {}),
     },
   };
 }

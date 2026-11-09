@@ -4,7 +4,6 @@ import { DEFINITIONS_VERSION } from "@/domain/envelope";
 import { GLOSSARY, GLOSSARY_NOTES, GLOSSARY_SOURCE } from "@/domain/glossary";
 import { METRIC_SORT_KEYS } from "@/domain/metrics";
 import { SIGNAL_IDS, SIGNALS } from "@/domain/signals";
-import { DIMENSION_IDS } from "@/tenants/schema";
 import type { ToolDeps } from "./runtime";
 import { READ_ONLY_ANNOTATIONS, runTool } from "./runtime";
 
@@ -25,9 +24,6 @@ export function registerDescribeCapabilities(server: McpServer, deps: ToolDeps):
     async (args) =>
       runTool("describe_capabilities", deps, args, async () => {
         const caps = deps.learning ? await deps.learning.capabilities() : null;
-        const defaultExclude = Object.fromEntries(
-          DIMENSION_IDS.filter((d) => t.defaults.exclude[d].length).map((d) => [d, t.defaults.exclude[d]]),
-        );
         return {
           tenant: t.id,
           environment: deps.env,
@@ -50,20 +46,20 @@ export function registerDescribeCapabilities(server: McpServer, deps: ToolDeps):
                 provisional: f.provisional,
                 ...(f.note ? { note: f.note } : {}),
                 matching:
-                  "Field values are trimmed and lower-cased; conso_id is the profile value as stored (empty when missing); " +
-                  "an account passes when it meets every 'require' condition and no 'reject' condition.",
-                require: f.require,
-                reject: f.reject,
+                  "An account that matches at least one rule is hidden while the filter is on. Values are trimmed and " +
+                  "lower-cased: username; conso_id (profile value as stored, empty when missing); name (first + last, " +
+                  'empty when blank); email (only the "@domain" is read — never returned); status (active / suspended); ' +
+                  "level (stored Dealer Level, empty when blank).",
+                hide: f.hide,
               },
             ]),
           ),
           defaults: {
             valid_only: t.defaults.savedFilter !== null,
             saved_filter: t.defaults.savedFilter,
-            exclude: defaultExclude,
+            other_filters: "all regions, branches, levels and categories",
             how_to_override:
-              "valid_only=false counts every learner account. A default exclude list applies only when neither filters " +
-              "nor exclude is set for that dimension; pass an empty list (e.g. exclude: {level: []}) to include those values.",
+              "valid_only=false counts every learner account, including the ones the saved filter hides.",
             sort: { query_metrics: "-enrolled", list_people: "name" },
           },
           counting:
@@ -107,6 +103,7 @@ export function registerDescribeCapabilities(server: McpServer, deps: ToolDeps):
             "Sessions, Days active and Last active from session data (needs session tracking).",
             "Accessed within a date range and First / Last progress (needs completion dates in bulk).",
             "Region from Branches & Regions (the profile value is used instead).",
+            "A status filter (logged in / never logged in) as a parameter: use list_people where {signal: logged_in, state: no}.",
           ],
           limits: {
             max_courses_per_request: t.limits.maxCoursesPerRequest,

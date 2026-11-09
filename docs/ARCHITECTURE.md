@@ -140,5 +140,5 @@ upstream call counts — never argument values or results.
   `list_people` filtered or sorted by `accessed`/`progress` is limited to 300 accounts.
 - **Org-wide distinct-people answers** across many courses may not fit one call.
 - A read-only Moodle plugin (aggregates, activity log, history) lifts all four — ROADMAP.
-- System-level roles are not visible through course data; COE staff are excluded by the default
-  Dealer Level exclude list.
+- System-level roles are not visible through course data; COE staff are hidden by the
+  `valid_dealers` level rule.

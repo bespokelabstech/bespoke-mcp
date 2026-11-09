@@ -9,8 +9,15 @@ import { z } from "zod";
  * serves exactly one tenant and one environment overlay.
  */
 
-/** Identity fields a saved filter may use (values are trimmed and lower-cased before matching). */
-export const SAVED_FILTER_FIELDS = ["username", "conso_id", "name"] as const;
+/**
+ * Fields a saved filter may use (BES-465): account identity fields plus Dealer Level, a
+ * deliberate exception. Region, branch and category are not allowed. Values are trimmed and
+ * lower-cased before matching:
+ *   username, conso_id (profile value as stored, "" when empty), name ("first last", "" when
+ *   blank), email (the "@domain" only), status ("active" | "suspended" | "" when not shown),
+ *   level (stored value, "" when empty).
+ */
+export const SAVED_FILTER_FIELDS = ["username", "conso_id", "name", "email", "status", "level"] as const;
 export type SavedFilterField = (typeof SAVED_FILTER_FIELDS)[number];
 
 export const conditionSchema = z
@@ -19,7 +26,7 @@ export const conditionSchema = z
     op: z.enum(["in", "not_in", "matches", "equals"]),
     /** in / not_in: a list; equals: one value; matches: a regular expression. */
     value: z.union([z.string(), z.array(z.string()).min(1)]),
-    /** Short reason shown when an account fails this condition, e.g. "Dummy Conso ID". */
+    /** Short reason shown when an account is hidden by this condition, e.g. "Dummy Conso ID". */
     label: z.string().min(1),
   })
   .superRefine((c, ctx) => {
@@ -49,6 +56,8 @@ export const dimensionSchema = z.object({
    *    for filtering, while the stored value remains the display label.
    */
   format: z.enum(["verbatim", "name_with_code"]).default("verbatim"),
+  /** Known values; any other non-empty value seen in an answer produces a warning. Empty = no check. */
+  expectedValues: z.array(z.string()).default([]),
 });
 
 export const tenantConfigSchema = z.object({
@@ -95,46 +104,30 @@ export const tenantConfigSchema = z.object({
   }),
 
   /**
-   * Saved filters (e.g. "valid_dealers"): named conditions over account identity fields only.
-   * Fields that have their own filter (region, level, branch, category) are not allowed here —
-   * a rule on them becomes that filter's default instead (see `defaults`).
+   * Saved filters (e.g. "valid_dealers"): a named list of rules. An account matching AT LEAST
+   * ONE rule is hidden while the filter is on (BES-465). Fields: SAVED_FILTER_FIELDS.
    */
   savedFilters: z
     .record(
       z.string().regex(/^[a-z][a-z0-9_]*$/),
-      z
-        .object({
-          label: z.string().min(1),
-          /** True while the client has not confirmed the rules. Shown in describe_capabilities. */
-          provisional: z.boolean().default(false),
-          note: z.string().optional(),
-          /** Every condition must hold. */
-          require: z.array(conditionSchema).default([]),
-          /** Any matching condition makes the account fail the filter. */
-          reject: z.array(conditionSchema).default([]),
-        })
-        .refine(
-          (f) => f.require.length + f.reject.length > 0,
-          "A saved filter needs at least one condition.",
-        ),
+      z.object({
+        label: z.string().min(1),
+        /** True while the client has not confirmed the rules. Shown in describe_capabilities. */
+        provisional: z.boolean().default(false),
+        note: z.string().optional(),
+        /** Hide an account that matches at least one of these rules. */
+        hide: z.array(conditionSchema).min(1),
+      }),
     )
     .default({}),
 
-  /** Defaults applied when the caller does not set them. */
+  /** Defaults applied when the caller does not set them (BES-465: every other filter is "all"). */
   defaults: z
     .object({
       /** Saved filter that is ON by default (the caller can switch it off). null = none. */
       savedFilter: z.string().nullable().default(null),
-      /** Values excluded by default per dimension, e.g. level: ["PC Center of Excellence"]. */
-      exclude: z
-        .object({
-          region: z.array(z.string()).default([]),
-          level: z.array(z.string()).default([]),
-          branch: z.array(z.string()).default([]),
-        })
-        .default({ region: [], level: [], branch: [] }),
     })
-    .default({ savedFilter: null, exclude: { region: [], level: [], branch: [] } }),
+    .default({ savedFilter: null }),
 
   /** Which graded items count towards avg_score. */
   scoring: z.object({ itemModules: z.array(z.string().min(1)).min(1) }).default({ itemModules: ["quiz"] }),

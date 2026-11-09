@@ -142,3 +142,23 @@ also decided Conso IDs are never edited or reinterpreted (2026-11-09).
 legacy-format accounts now count, COE is excluded by a default instead of a status. The known
 gaps (Logged in within past ranges, Accessed within a range, sessions, region source) remain
 until the connector can read BES-465's reporting API (ROADMAP, phase B).
+
+## ADR-012 — `valid_dealers` = BES-465's 7 hide rules; no default level exclude (2026-11-09)
+
+**Decision.** BES-465 was updated with the GLA rules (from Jona's eligibility sheet). The saved
+filter is now one list of rules; an account matching at least one is hidden. Fields: username,
+Conso ID, name, email (domain only), account status, and Dealer Level (BES-465's deliberate
+exception). The 7 rules are internal email domain, test/training/admin username, test or dummy
+name, dummy Conso ID (in the username), placeholder name, suspended, COE or blank level. The
+default level exclude from ADR-011 is removed: every other filter defaults to "all". Empty
+profile values show as "Not set" (BES-465 wording). Supersedes the saved-filter part of ADR-011.
+
+**Why.** Same rules as the dashboard, so "Valid dealers" means the same number in both. Renzel
+has not started the custom-API side, so Bespoke wrote the patterns from the rule table; they
+can become the shared definition.
+
+**Cost / risks.** The connector now reads email addresses, but keeps only the domain in the
+Moodle adapter — never returned, logged or cached in full. If Moodle hides emails from the
+service account, rule 1 cannot apply; every answer warns. Patterns for rules 4 and 5 are
+guesses (METRICS lists them). The previous dummy check on the Conso ID profile field and the
+repeated 2–3 digit block pattern are dropped because BES-465 does not have them.

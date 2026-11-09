@@ -1,5 +1,5 @@
 import { mapLimit } from "@/core/concurrency";
-import type { Course, Enrolment, LearningDataPort } from "@/ports/learning";
+import type { AccountProfile, Course, Enrolment, LearningDataPort } from "@/ports/learning";
 import type { TenantConfig } from "@/tenants/schema";
 import type { Filters, PersonView } from "./people";
 import { classify, isLearner, matchesFilters } from "./people";
@@ -75,14 +75,18 @@ function addRecords(
   views: Map<number, PersonView>,
   course: Course,
   enrolments: Enrolment[],
-  profiles: Map<number, Record<string, string>>,
+  profiles: Map<number, AccountProfile>,
   tenant: TenantConfig,
   filters: Filters,
 ): void {
   for (const e of enrolments) {
     let person = views.get(e.userId);
     if (!person) {
-      person = classify({ ...e, profile: profiles.get(e.userId) ?? {} }, tenant);
+      const p = profiles.get(e.userId);
+      person = classify(
+        { ...e, profile: p?.fields ?? {}, emailDomain: p?.emailDomain, suspended: p?.suspended },
+        tenant,
+      );
       views.set(e.userId, person);
     }
     out.observedRegions.add(person.region);

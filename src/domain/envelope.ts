@@ -3,7 +3,7 @@ import type { AccessWindow } from "./time";
 import { formatInZone } from "./time";
 
 /** Bump when any metric definition in docs/METRICS.md changes meaning. */
-export const DEFINITIONS_VERSION = "2026-11-mvp4";
+export const DEFINITIONS_VERSION = "2026-11-mvp5";
 
 export interface Envelope<T> {
   tenant: string;

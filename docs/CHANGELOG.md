@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 — 2026-11-09
+
+`valid_dealers` follows the updated BES-465 rules (definitions `2026-11-mvp5`, ADR-012):
+
+- Saved filter = one "hide if any rule matches" list; fields username, Conso ID, name, email
+  (domain only), status, Dealer Level. The 7 BES-465 rules, provisional (pending Jona).
+- Moodle adapter reads the email domain and the suspended flag from the profile call already
+  made (no extra calls). The address itself never leaves the adapter.
+- Default level exclude (COE) removed — COE and blank levels are rule 7 of the saved filter;
+  every other filter defaults to "all".
+- Empty profile values show as "Not set".
+- Warnings when emails or account status are not visible to the service account (the rule then
+  cannot apply), and for a Dealer Level outside the 4 dealer levels and COE.
+- `describe_capabilities`: updated "Valid dealer" glossary text, `hide` rules, defaults.
+
 ## 0.4.0 — 2026-11-09
 
 Aligned with BES-465 (definitions `2026-11-mvp4`, see METRICS and ADR-011):

@@ -189,28 +189,29 @@ describe("sortMetricRows", () => {
 });
 
 describe("loadScope on synthetic data", () => {
-  it("applies the base scope and marks accounts failing the saved filter", async () => {
+  it("applies the base scope and names the rules that hide each account", async () => {
     const port = new FixtureLearningAdapter({ nowSec: 1_800_000_000 });
     const { records: all } = await loadScope(port, t, [port.courses[0]!], NO_FILTERS);
     const byUser = new Map(all.map((r) => [r.person.userId, r.person]));
     expect(byUser.has(EDGE.teacher)).toBe(false);
     expect(byUser.has(EDGE.manager)).toBe(false);
-    for (const id of [
-      EDGE.dealerAlnum,
-      EDGE.dupDropped0,
-      EDGE.legacyNone,
-      EDGE.legacyFb,
-      EDGE.legacyNl,
-      EDGE.staff,
-    ]) {
-      expect(byUser.get(id)!.valid).toBe(true);
+    for (const id of [EDGE.dealerAlnum, EDGE.legacyNone, EDGE.legacyFb, EDGE.legacyNl]) {
+      expect(byUser.get(id)!.failed).toEqual([]);
     }
-    expect(byUser.get(EDGE.dummyRepeat)!.failed).toEqual(["Dummy Conso ID"]);
-    expect(byUser.get(EDGE.dummyOnes)!.failed).toEqual(["Dummy Conso ID"]); // username "admin.user"
-    expect(byUser.get(EDGE.uat)!.failed).toEqual(["Dummy Conso ID", "Dummy username"]);
+    // copies dealer 1000's profile, whose Dealer Level is blank
+    expect(byUser.get(EDGE.dupDropped0)!.failed).toEqual(["COE or blank Dealer Level"]);
+    expect(byUser.get(EDGE.staff)!.failed).toEqual(["COE or blank Dealer Level"]);
+    expect(byUser.get(EDGE.dummyRepeat)!.failed).toEqual(["Test, training or admin username"]);
+    expect(byUser.get(EDGE.dummyOnes)!.failed).toEqual(["Test, training or admin username"]);
+    expect(byUser.get(EDGE.uat)!.failed).toEqual(["Dummy Conso ID"]);
+    expect(byUser.get(EDGE.internalEmail)!.failed).toEqual(["Internal email domain"]);
+    expect(byUser.get(EDGE.suspended)!.failed).toEqual(["Suspended account"]);
+    expect(byUser.get(EDGE.sampleName)!.failed).toEqual(["Test or dummy name"]);
+    expect(byUser.get(EDGE.blankName)!.failed).toEqual(["Placeholder name"]);
+    expect(byUser.get(EDGE.legacyName)!.failed).toEqual(["Placeholder name"]);
     const counts = populationCounts(all, "accounts");
-    expect(counts.all - counts.valid).toBe(3);
-    expect(counts.notValid).toEqual({ "Dummy Conso ID": 3 });
+    const hidden = Object.values(counts.notValid).reduce((a, b) => a + b, 0);
+    expect(counts.all - counts.valid).toBe(hidden);
     expect(selectPopulation(all, true).length).toBe(counts.valid);
   });
 });

@@ -1,6 +1,6 @@
 # Metric definitions
 
-`definitions_version: 2026-11-mvp4` (returned in every response). Any change in meaning must
+`definitions_version: 2026-11-mvp5` (returned in every response). Any change in meaning must
 update this file and bump `DEFINITIONS_VERSION` in `src/domain/envelope.ts`.
 
 Labels, defaults, filters and sort follow **BES-465** (Compliance Dashboard v2), so this
@@ -12,21 +12,21 @@ responses carry a warning.
 
 ## Glossary (BES-465, word for word) and how this connector measures it
 
-| Label                       | Meaning (BES-465)                                                                                   | In this connector                                                                                                                                                    |
-| --------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Account                     | A learner account: has the student role and no trainer or admin role. Always applied, not a filter. | Roles read per course (`student`, none of `editingteacher`, `teacher`, `manager`, `coursecreator`, `redemptionmanager`). Site-level admin roles are not visible.     |
-| Valid dealer                | Matches the `valid_dealers` saved filter (rules from the GLA team)                                  | Provisional rules until the GLA team confirms (see below)                                                                                                            |
-| Enrolled                    | Enrolled in the course. Enrolment differs by Dealer Level (`local_enrolrules`).                     | Exact                                                                                                                                                                |
-| Logged in                   | Signed in to the app at least once. Within a date range: had a session in the range.                | Last sign-in only (app sign-in or web visit). Exact for ranges ending today; past ranges under-count people who signed in again later                                |
-| Sessions                    | App use. A new session starts after 30 minutes idle.                                                | Not available (needs session tracking)                                                                                                                               |
-| Days active                 | Days with at least one session                                                                      | Not available                                                                                                                                                        |
-| Last active                 | Last app use. Falls back to last sign-in until session data exists.                                 | Last sign-in (the fallback)                                                                                                                                          |
-| Accessed                    | Completed at least one activity in the course. Within a date range: completed one in the range.     | All-time only; a date range is not applied (warning). Verified: an app PDF completion moved progress 0 → 25%                                                         |
-| Access rate                 | Accessed ÷ logged in, for a course                                                                  | Accessed ÷ accounts with a sign-in on record; `null` when a date range is set (warning)                                                                              |
-| Progress                    | % of a course's activities completed                                                                | Exact (Moodle progress %)                                                                                                                                            |
-| First / Last progress       | Dates of the first and latest completed activity in a course                                        | Not available (no completion dates in bulk)                                                                                                                          |
-| Completed / Avg. completion | Finished the course / share of enrolments completed                                                 | Exact; Avg. completion = completed ÷ **enrolled** enrolments (courses without completion tracking count as not completed and are reported as `untracked_enrolments`) |
-| Region                      | Taken from the dealer's branch in Branches & Regions                                                | **Different source:** the Region value stored on the profile; responses that filter or group by region say so                                                        |
+| Label                       | Meaning (BES-465)                                                                                             | In this connector                                                                                                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Account                     | A learner account: has the student role and no trainer or admin role. Always applied, not a filter.           | Roles read per course (`student`, none of `editingteacher`, `teacher`, `manager`, `coursecreator`, `redemptionmanager`). Site-level admin roles are not visible.     |
+| Valid dealer                | Not hidden by the `valid_dealers` saved filter (rules below). This includes being one of the 4 dealer levels. | Same 7 rules as patterns (pending Jona's confirmation); unexpected Dealer Levels are flagged in a warning                                                            |
+| Enrolled                    | Enrolled in the course. Enrolment differs by Dealer Level (`local_enrolrules`).                               | Exact                                                                                                                                                                |
+| Logged in                   | Signed in to the app at least once. Within a date range: had a session in the range.                          | Last sign-in only (app sign-in or web visit). Exact for ranges ending today; past ranges under-count people who signed in again later                                |
+| Sessions                    | App use. A new session starts after 30 minutes idle.                                                          | Not available (needs session tracking)                                                                                                                               |
+| Days active                 | Days with at least one session                                                                                | Not available                                                                                                                                                        |
+| Last active                 | Last app use. Falls back to last sign-in until session data exists.                                           | Last sign-in (the fallback)                                                                                                                                          |
+| Accessed                    | Completed at least one activity in the course. Within a date range: completed one in the range.               | All-time only; a date range is not applied (warning). Verified: an app PDF completion moved progress 0 → 25%                                                         |
+| Access rate                 | Accessed ÷ logged in, for a course                                                                            | Accessed ÷ accounts with a sign-in on record; `null` when a date range is set (warning)                                                                              |
+| Progress                    | % of a course's activities completed                                                                          | Exact (Moodle progress %)                                                                                                                                            |
+| First / Last progress       | Dates of the first and latest completed activity in a course                                                  | Not available (no completion dates in bulk)                                                                                                                          |
+| Completed / Avg. completion | Finished the course / share of enrolments completed                                                           | Exact; Avg. completion = completed ÷ **enrolled** enrolments (courses without completion tracking count as not completed and are reported as `untracked_enrolments`) |
+| Region                      | Taken from the dealer's branch in Branches & Regions                                                          | **Different source:** the Region value stored on the profile; responses that filter or group by region say so. Empty shows as "Not set"                              |
 
 Days run midnight to midnight, Manila time.
 
@@ -35,46 +35,58 @@ Days run midnight to midnight, Manila time.
 1. **Base scope (always):** learner accounts only — per course, the `student` role and none of
    the non-learner roles. Trainers and admins never appear, whatever the filters.
 2. **Saved filter `valid_dealers` — on by default** (`valid_only: true`). `valid_only: false`
-   counts every learner account.
-3. **Default exclude lists** — `level` excludes `PC Center of Excellence` by default. The
-   default applies only when the caller sets neither `filters.level` nor `exclude.level`; pass
-   `exclude: {level: []}` to include COE.
+   counts every learner account, including the accounts the filter hides.
+3. Every other filter defaults to "all" (all regions, branches, levels, categories).
 
 **Every account counts on its own.** Accounts are never merged (a Dealer with two accounts
-counts twice) and identifiers are never repaired (an 11-digit Conso ID stays as stored).
+counts twice, until one is suspended in Moodle) and identifiers are never repaired.
 
-### `valid_dealers` (provisional, `src/tenants/gla/base.ts`)
+### `valid_dealers` (BES-465 rules, provisional, `src/tenants/gla/base.ts`)
 
-Conditions use BES-465's operators (`in`, `not_in`, `matches`, `equals`) over identity fields
-only: `username`, `conso_id` (the `dealer_conso_id` profile value as stored, empty when missing
-or a placeholder), `name`. Values are trimmed and lower-cased before matching. An account passes
-when it meets every `require` condition and no `reject` condition. Fields that have their own
-filter (region, level, branch, category) are rejected at config load — a rule on them becomes
-that filter's default (like COE).
+**An account that matches at least one rule is hidden** while the filter is on. Operators:
+`in`, `not_in`, `matches`, `equals`. Fields (values trimmed and lower-cased): `username`;
+`conso_id` (profile value as stored, empty when missing); `name` (first + last, empty when
+blank); `email` (**only the `@domain`** — the connector drops the rest of the address and never
+returns or logs the domain); `status` (`active` / `suspended`); `level` (stored Dealer Level,
+empty when blank — the one profile filter BES-465 allows here). Region, branch and category are
+rejected at config load.
 
-| Condition                                                         | Label shown when failed |
-| ----------------------------------------------------------------- | ----------------------- |
-| reject `conso_id matches ^(?:(\d)\1*\|(\d{2,3})\2+\|1{10}\d{2})$` | Dummy Conso ID          |
-| reject `username matches` the same pattern                        | Dummy username          |
+The patterns are Bespoke's reading of BES-465's rule table (pending Jona's confirmation):
 
-The pattern: one digit repeated at any length (`0`, `000`, `111111111111`); a 2–3 digit block
-repeated (`123123123123`; 4-digit blocks are allowed — `0001 0001 0001` could be branch +
-sequence); the `1111111111xx` test series (also covers the staging UAT pool
-`111111111119`–`169`). There is **no format rule**: legacy and old-format accounts are valid
-dealers unless a rule rejects them. Test accounts with a real-looking ID (e.g. `000700099515`)
-count by design. Placeholder text (`n/a`, `na`, `none`, `null`, `nil`, `-`) counts as empty.
+| #   | BES-465 rule                                                                             | Pattern                                                                                | Label                            |
+| --- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------- |
+| 1   | Email domain bihasa.ph, bespokelabs.tech or training.net                                 | email `matches @(bihasa\.ph\|bespokelabs\.tech\|training\.net)$`                       | Internal email domain            |
+| 2   | Username starts `gla.train` / `glass.train`, or contains "test" or "admin"               | username `matches ^(gla\|glass)\.train\|test\|admin`                                   | Test, training or admin username |
+| 3   | Name has the whole word DUMMY, TEST, SAMPLE, DEMO, STUDENT or TRY, or is "Admin User"    | name `matches \b(dummy\|test\|sample\|demo\|student\|try)\b`; name `equals admin user` | Test or dummy name               |
+| 4   | Dummy Conso ID: 9991 series, one digit repeated with a short suffix, or starts 123456789 | username `matches ^9991\|^(\d)\1{5,}\d{0,3}$\|^123456789`                              | Dummy Conso ID                   |
+| 5   | Placeholder name: blank, contains "PC SFLMS Live", or starts with a legacy username      | name `equals ""`; `matches pc sflms live`; `matches ^[a-z]+\d*_[0-9a-z]{3,5}_\d+`      | Placeholder name                 |
+| 6   | Suspended account                                                                        | status `equals suspended`                                                              | Suspended account                |
+| 7   | Dealer Level is PC Center of Excellence or blank                                         | level `in ["pc center of excellence", ""]`                                             | COE or blank Dealer Level        |
 
-Every response carries `population`: `learner_accounts`, `valid_dealers`, `not_valid`
-(count per first failed condition) and `counted`, in the answer's unit.
+Guesses to confirm: rule 4 reads "one digit repeated" as 6+ times with up to 3 extra digits
+(catches `111111111125` and the staging UAT pool) and "9991 series" as starting with 9991;
+rule 5 reads "legacy username" as letters + optional digits, `_`, 3–5 characters, `_`, digits
+(`cl_0106_00003`, `sl2_0575c_00012`; not `glp_00099`).
+
+**Not rules (BES-465):** duplicates count until suspended; "never logged in" is a status filter
+(here: `list_people` `where: {signal: logged_in, state: no}`); bad branch codes count.
+
+**Warnings:** if no account in an answer has a visible email domain (or suspension flag), the
+rule cannot apply and every answer says so. A Dealer Level outside the 4 dealer levels and COE
+is flagged (the glossary's "one of the 4 dealer levels" and rule 7 agree only while no other
+value exists — true on staging, 2026-11-09).
+
+Every response carries `population`: `learner_accounts`, `valid_dealers`, `not_valid` (count
+per first matching rule) and `counted`, in the answer's unit.
 
 ## Profile attributes
 
-| Dimension    | Source (profile field) | Value used                                                                                                          |
-| ------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Region       | `Region_Dropdown`      | Verbatim; empty → `N/A`                                                                                             |
-| Dealer Level | `level`                | Verbatim; empty → `N/A`                                                                                             |
-| Branch       | `branch_code`          | Stored label verbatim (e.g. `QUEZON AVE (0032)`) plus parsed `branch_name`, `branch_code`; bare `0032` → name `N/A` |
-| Conso ID     | `dealer_conso_id`      | As stored (trimmed); empty → `N/A`. `username` is returned alongside                                                |
+| Dimension    | Source (profile field) | Value used                                                                                                              |
+| ------------ | ---------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Region       | `Region_Dropdown`      | Verbatim; empty → `Not set`                                                                                             |
+| Dealer Level | `level`                | Verbatim; empty → `Not set`                                                                                             |
+| Branch       | `branch_code`          | Stored label verbatim (e.g. `QUEZON AVE (0032)`) plus parsed `branch_name`, `branch_code`; bare `0032` → name `Not set` |
+| Conso ID     | `dealer_conso_id`      | As stored (trimmed); empty → `Not set`. `username` is returned alongside                                                |
 
 Look-alike values (`Visayas` next to `Visayas 1/2/3`) are separate values; responses add a note.
 
@@ -85,7 +97,7 @@ Look-alike values (`Visayas` next to `Visayas 1/2/3`) are separate values; respo
 | `from`, `to` / `recent_days`            | Date range (Manila days). See below                                              |
 | `valid_only`                            | Saved filter on (default) / off                                                  |
 | `filters.{region,level,branch}`         | Include lists — case-insensitive exact match; branch matches label, name or code |
-| `exclude.{region,level,branch}`         | Exclude lists (defaults above)                                                   |
+| `exclude.{region,level,branch}`         | Exclude lists (default: none)                                                    |
 | `category_ids` / `exclude_category_ids` | Include / exclude courses by category (sub-categories included)                  |
 | `sort`                                  | Any column, `-` prefix for descending; nulls last                                |
 

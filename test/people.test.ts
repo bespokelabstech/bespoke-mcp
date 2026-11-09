@@ -4,45 +4,118 @@ import { tenantConfigSchema } from "@/tenants/schema";
 import { account, glaStaging } from "./helpers";
 
 const t = glaStaging();
-const view = (over: Parameters<typeof account>[0]) => classify(account(over), t);
+/** A clean, valid dealer unless the test overrides something. */
+const view = (over: Parameters<typeof account>[0]) =>
+  classify(
+    account({
+      emailDomain: "@example.com",
+      suspended: false,
+      ...over,
+      profile: { level: "Great Life Builder", ...over.profile },
+    }),
+    t,
+  );
+const hiddenBy = (over: Parameters<typeof account>[0]) => view(over).failed;
 
-describe("valid_dealers saved filter (provisional GLA rules)", () => {
-  it("passes canonical, alphanumeric and legacy-format accounts — no format rule", () => {
-    for (const id of [
+describe("valid_dealers saved filter (BES-465 rules, provisional)", () => {
+  it("keeps real dealers, legacy formats and duplicates — there is no format rule", () => {
+    for (const username of [
       "077700099283",
       "500000j99901",
-      "0077000QX901",
-      "fb 007700901",
+      "fb.user",
       "nl_0999_0007",
-      "077700000",
-      "",
+      "000700099515",
+      "000100010001",
     ]) {
-      expect(view({ userId: 1, username: "legacy.user", profile: { dealer_conso_id: id } }).valid).toBe(true);
+      expect(hiddenBy({ userId: 1, username })).toEqual([]);
     }
-    // test account with a legitimate structure still counts (per business rule)
-    expect(view({ userId: 4, profile: { dealer_conso_id: "000700099515" } }).valid).toBe(true);
   });
 
-  it("rejects dummy Conso IDs and dummy usernames, naming the failed rule", () => {
-    for (const id of [
+  it("1. internal email domains (only the domain is read)", () => {
+    for (const d of ["@bihasa.ph", "@bespokelabs.tech", "@training.net", "@BIHASA.PH"]) {
+      expect(hiddenBy({ userId: 1, emailDomain: d })).toEqual(["Internal email domain"]);
+    }
+    expect(hiddenBy({ userId: 1, emailDomain: "@notbihasa.ph.example" })).toEqual([]);
+    expect(hiddenBy({ userId: 1, emailDomain: "@gmail.com" })).toEqual([]);
+  });
+
+  it("2. training, test or admin usernames", () => {
+    for (const u of ["gla.train01", "glass.train.2", "aimon.test", "testuser", "siteadmin"]) {
+      expect(hiddenBy({ userId: 1, username: u })).toContain("Test, training or admin username");
+    }
+    expect(hiddenBy({ userId: 1, username: "gla.trainee.not" })).toContain(
+      "Test, training or admin username",
+    );
+    expect(hiddenBy({ userId: 1, username: "glatrain" })).toEqual([]);
+  });
+
+  it("3. whole-word test or dummy names, and Admin User", () => {
+    for (const [f, l] of [
+      ["Dummy", "Account"],
+      ["Juan", "TEST"],
+      ["Sample", "Dealer"],
+      ["Demo", "One"],
+      ["Student", "X"],
+      ["Try", "Me"],
+      ["Admin", "User"],
+    ]) {
+      expect(hiddenBy({ userId: 1, firstName: f, lastName: l })).toEqual(["Test or dummy name"]);
+    }
+    // whole words only
+    for (const [f, l] of [
+      ["Testa", "Cruz"],
+      ["Trystan", "Lim"],
+      ["Admin", "Users"],
+      ["Demolition", "Santos"],
+    ]) {
+      expect(hiddenBy({ userId: 1, firstName: f, lastName: l })).toEqual([]);
+    }
+  });
+
+  it("4. dummy Conso IDs in the username", () => {
+    for (const u of [
+      "999100012345",
+      "000000000",
       "111111111111",
-      "000000000000",
-      "123123123123",
-      "121212121212",
-      "111111111112",
-      "0",
-      "000",
+      "111111111125",
+      "1111111",
+      "123456789012",
     ]) {
-      const v = view({ userId: 1, username: "x.y", profile: { dealer_conso_id: id } });
-      expect(v.valid).toBe(false);
-      expect(v.failed).toEqual(["Dummy Conso ID"]);
+      expect(hiddenBy({ userId: 1, username: u })).toEqual(["Dummy Conso ID"]);
     }
-    // staging UAT pool: caught by the 1111111111xx pattern on the username
-    expect(view({ userId: 1, username: "111111111125", profile: {} }).failed).toEqual(["Dummy username"]);
+    for (const u of ["077700099283", "000100001234", "100000000000", "123123123123"]) {
+      expect(hiddenBy({ userId: 1, username: u })).toEqual([]);
+    }
   });
 
-  it("does not flag canonical ids with a repeated 4-digit block as dummy", () => {
-    expect(view({ userId: 1, profile: { dealer_conso_id: "000100010001" } }).valid).toBe(true);
+  it("5. placeholder names: blank, PC SFLMS Live, or starting with a legacy username", () => {
+    expect(hiddenBy({ userId: 1, firstName: "", lastName: " " })).toEqual(["Placeholder name"]);
+    expect(hiddenBy({ userId: 1, firstName: "PC SFLMS Live", lastName: "3" })).toEqual(["Placeholder name"]);
+    expect(hiddenBy({ userId: 1, firstName: "cl_0106_00003", lastName: "Reyes" })).toEqual([
+      "Placeholder name",
+    ]);
+    expect(hiddenBy({ userId: 1, firstName: "sl2_0575c_00012", lastName: "" })).toEqual(["Placeholder name"]);
+    expect(hiddenBy({ userId: 1, firstName: "Maria", lastName: "cl_0106_00003" })).toEqual([]);
+  });
+
+  it("6. suspended accounts", () => {
+    expect(hiddenBy({ userId: 1, suspended: true })).toEqual(["Suspended account"]);
+    expect(hiddenBy({ userId: 1, suspended: null })).toEqual([]);
+  });
+
+  it("7. PC Center of Excellence or blank Dealer Level", () => {
+    expect(hiddenBy({ userId: 1, profile: { level: "PC Center of Excellence" } })).toEqual([
+      "COE or blank Dealer Level",
+    ]);
+    expect(hiddenBy({ userId: 1, profile: { level: "" } })).toEqual(["COE or blank Dealer Level"]);
+    expect(hiddenBy({ userId: 1, profile: { level: "n/a" } })).toEqual(["COE or blank Dealer Level"]);
+    expect(hiddenBy({ userId: 1, profile: { level: "Great Life Executive" } })).toEqual([]);
+  });
+
+  it("lists every rule that hides an account, once each", () => {
+    expect(
+      hiddenBy({ userId: 1, username: "admin.test", firstName: "Test", lastName: "Test", suspended: true }),
+    ).toEqual(["Test, training or admin username", "Test or dummy name", "Suspended account"]);
   });
 
   it("keeps the Conso ID as stored: no leading-zero repair, placeholders are empty", () => {
@@ -50,10 +123,10 @@ describe("valid_dealers saved filter (provisional GLA rules)", () => {
     expect(view({ userId: 1, profile: { dealer_conso_id: "N/A" } }).identifier).toBeNull();
   });
 
-  it("COE is not a saved-filter rule (it is a level default)", () => {
-    expect(
-      view({ userId: 1, profile: { dealer_conso_id: "4321", level: "PC Center of Excellence" } }).valid,
-    ).toBe(true);
+  it("records whether the LMS showed email and status", () => {
+    const v = classify(account({ userId: 1 }), t);
+    expect(v.emailKnown).toBe(false);
+    expect(v.statusKnown).toBe(false);
   });
 });
 
@@ -67,14 +140,16 @@ describe("base scope (learner accounts)", () => {
 });
 
 describe("tenant config", () => {
-  it("rejects saved-filter conditions on fields that have their own filter, and bad values", () => {
+  it("rejects saved-filter rules on region, branch or category, and bad values", () => {
     const base = { ...t, savedFilters: {} } as Record<string, unknown>;
     const bad = (cond: Record<string, unknown>) =>
       tenantConfigSchema.safeParse({
         ...base,
-        savedFilters: { f: { label: "F", reject: [{ label: "x", ...cond }] } },
+        savedFilters: { f: { label: "F", hide: [{ label: "x", ...cond }] } },
       }).success;
-    expect(bad({ field: "level", op: "in", value: ["PC Center of Excellence"] })).toBe(false);
+    expect(bad({ field: "region", op: "in", value: ["Visayas"] })).toBe(false);
+    expect(bad({ field: "branch", op: "equals", value: "0032" })).toBe(false);
+    expect(bad({ field: "level", op: "in", value: ["PC Center of Excellence"] })).toBe(true); // BES-465 exception
     expect(bad({ field: "username", op: "in", value: "one" })).toBe(false);
     expect(bad({ field: "username", op: "matches", value: "(" })).toBe(false);
     expect(bad({ field: "username", op: "in", value: ["admin"] })).toBe(true);
@@ -82,28 +157,36 @@ describe("tenant config", () => {
 });
 
 describe("profile values", () => {
-  it('treats placeholder text in profile fields as empty ("N/A")', () => {
+  it('treats placeholder text in profile fields as empty ("Not set")', () => {
     const v = view({ userId: 1, profile: { Region_Dropdown: "n/a", level: "None", branch_code: "-" } });
-    expect(v.region).toBe("N/A");
-    expect(v.level).toBe("N/A");
-    expect(v.branch.label).toBe("N/A");
+    expect(v.region).toBe("Not set");
+    expect(v.level).toBe("Not set");
+    expect(v.branch.label).toBe("Not set");
   });
 
-  it("uses profile values verbatim and N/A for empty", () => {
+  it('uses profile values verbatim and "Not set" for empty', () => {
     const v = view({
       userId: 1,
       profile: { Region_Dropdown: "Visayas 2", level: "", branch_code: "CUBAO (0101)" },
     });
     expect(v.region).toBe("Visayas 2");
-    expect(v.level).toBe("N/A");
+    expect(v.level).toBe("Not set");
     expect(v.branch).toEqual({ label: "CUBAO (0101)", name: "CUBAO", code: "0101" });
   });
 
   it("branch keeps the stored label and exposes name + code", () => {
-    expect(parseBranch("DAVAO (0575C)", "name_with_code", "N/A").code).toBe("0575c");
-    expect(parseBranch("0032", "name_with_code", "N/A")).toEqual({ label: "0032", name: null, code: "0032" });
-    expect(parseBranch("777", "name_with_code", "N/A")).toEqual({ label: "777", name: null, code: null });
-    expect(parseBranch(" ", "name_with_code", "N/A")).toEqual({ label: "N/A", name: null, code: null });
+    expect(parseBranch("DAVAO (0575C)", "name_with_code", "Not set").code).toBe("0575c");
+    expect(parseBranch("0032", "name_with_code", "Not set")).toEqual({
+      label: "0032",
+      name: null,
+      code: "0032",
+    });
+    expect(parseBranch("777", "name_with_code", "Not set")).toEqual({ label: "777", name: null, code: null });
+    expect(parseBranch(" ", "name_with_code", "Not set")).toEqual({
+      label: "Not set",
+      name: null,
+      code: null,
+    });
   });
 });
 
@@ -112,8 +195,8 @@ describe("filters and similar values", () => {
     userId: 1,
     profile: { Region_Dropdown: "Visayas 1", level: "Great Life Builder", branch_code: "CUBAO (0101)" },
   });
-  const inc = (include: Record<string, string[]>) => matchesFilters(v, { include, exclude: {} }, "N/A");
-  const exc = (exclude: Record<string, string[]>) => matchesFilters(v, { include: {}, exclude }, "N/A");
+  const inc = (include: Record<string, string[]>) => matchesFilters(v, { include, exclude: {} }, "Not set");
+  const exc = (exclude: Record<string, string[]>) => matchesFilters(v, { include: {}, exclude }, "Not set");
   it("include lists match exactly (case-insensitive); branch by label, name or code", () => {
     expect(inc({ region: ["visayas 1"] })).toBe(true);
     expect(inc({ region: ["Visayas"] })).toBe(false); // separate value, not a prefix

@@ -10,9 +10,9 @@
   from Branches & Regions exact, with sub-second answers. The Moodle connector stays for
   drill-downs and as a fallback. Needs: the API shipped, a read-only service token, and the
   saved-filter JSON shared between both systems so `valid_dealers` cannot drift.
-- **Open with the GLA team / Renzel:** the confirmed `valid_dealers` rules (e.g. suspended
-  accounts — needs the account status field here too), and the saved-filter JSON shape
-  (this connector uses `require` / `reject` lists of conditions).
+- **Open with the GLA team / Renzel:** Jona's confirmation of the 7 `valid_dealers` rules, and
+  the exact patterns — Bespoke's (METRICS) can be the shared definition once they pass staging.
+  A `status` parameter (logged in / never logged in) once the API names its values.
 
 ## Other items
 
