@@ -14,6 +14,11 @@
 - Warnings when emails or account status are not visible to the service account (the rule then
   cannot apply), and for a Dealer Level outside the 4 dealer levels and COE.
 - `describe_capabilities`: updated "Valid dealer" glossary text, `hide` rules, defaults.
+- Review fixes: the email/status warnings now report partial visibility ("N of M accounts") and
+  are carried across answers in parts; `matches` rules are case-insensitive; the Conso ID shows
+  the username when the profile field is empty (`conso_id_from_username`); MOODLE_SETUP adds
+  `moodle/site:viewuseridentity` for emails (Moodle source: otherwise an email shows only when
+  the account allows it); `suspended` needs no extra capability.
 
 ## 0.4.0 — 2026-11-09
 

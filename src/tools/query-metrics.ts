@@ -35,7 +35,8 @@ import type { AccessWindow } from "@/domain/time";
 import { resolveWindow } from "@/domain/time";
 import type { Course, LearningDataPort } from "@/ports/learning";
 import type { TenantConfig } from "@/tenants/schema";
-import { dataWarnings, regionSourceNote } from "./notes";
+import type { DataFacts } from "./notes";
+import { dataFacts, emptyFacts, factWarnings, mergeFacts, regionSourceNote } from "./notes";
 import type { ToolDeps } from "./runtime";
 import { READ_ONLY_ANNOTATIONS, remainingBudgetMs, requireLearning, runTool } from "./runtime";
 import {
@@ -71,6 +72,8 @@ type PagesState = {
   tot: Packed;
   pop: PopulationCounts;
   obs: string[];
+  /** Data-warning facts gathered so far (see notes.ts). */
+  df: DataFacts;
 };
 type PeopleState = { m: "people"; after: string | null; acc: Packed[]; tot: Packed };
 
@@ -119,8 +122,8 @@ export function registerQueryMetrics(server: McpServer, deps: ToolDeps): void {
       description:
         `Count ${people} and their metrics (Enrolled, Logged in, Accessed, Access rate, Progress, Completed, Avg. completion, ` +
         `web course access, average score), grouped by ${t.dimensions.region.label}, ${t.dimensions.level.label}, ` +
-        `${t.dimensions.branch.label}, ${v.course} and/or category. Defaults: valid dealers only, the default exclude lists ` +
-        `(see describe_capabilities), largest groups first. Large questions are answered in parts: while complete=false, ` +
+        `${t.dimensions.branch.label}, ${v.course} and/or category. Defaults: valid dealers only (see describe_capabilities), ` +
+        `every other filter "all", largest groups first. Large questions are answered in parts: while complete=false, ` +
         `call again with the same arguments plus next_cursor; rows and totals come with the last part. ` +
         `Report numbers exactly as returned; never recompute or estimate.`,
       inputSchema,
@@ -375,6 +378,7 @@ async function runPages(c: RunCtx, prev: PagesState | undefined, doneIds: number
   let tot = prev ? unpackRow(c, prev.tot, []) : emptyPartial();
   let pop: PopulationCounts = prev?.pop ?? emptyCounts();
   const observed = new Set<string>(prev?.obs ?? []);
+  let facts: DataFacts = prev?.df ?? emptyFacts();
   const done = new Set(doneIds);
   const seen: EnrolmentRecord[] = [];
   const scoresByCourse = new Map<number, Awaited<ReturnType<typeof maybeScores>>>();
@@ -386,6 +390,7 @@ async function runPages(c: RunCtx, prev: PagesState | undefined, doneIds: number
     tot: packRow(c, tot, []),
     pop,
     obs: [...observed],
+    df: facts,
   });
   let pages = 0;
   const started = Date.now();
@@ -422,6 +427,13 @@ async function runPages(c: RunCtx, prev: PagesState | undefined, doneIds: number
       pop = addCounts(pop, populationCounts(page.records, "enrolments"));
       const selected = selectPopulation(page.records, c.validOnly);
       seen.push(...selected);
+      facts = mergeFacts(
+        facts,
+        dataFacts(
+          c.t,
+          selected.map((r) => r.person),
+        ),
+      );
       const opts = aggOpts(c, null, scores, "enrolments");
       acc = mergePartials(acc, aggregate(selected, { ...opts, groupBy: c.groupBy }));
       tot = mergePartials([tot], aggregate(selected, { ...opts, groupBy: [] }))[0] ?? tot;
@@ -439,7 +451,7 @@ async function runPages(c: RunCtx, prev: PagesState | undefined, doneIds: number
     if (!finished) break;
   }
 
-  notes(c, seen, observed);
+  notes(c, seen, observed, facts);
   const progress = {
     courses_done: done.size,
     courses_total: c.courses.length,
@@ -533,7 +545,8 @@ async function maybeScores(c: RunCtx, courses: Course[]) {
   );
 }
 
-function notes(c: RunCtx, selected: EnrolmentRecord[], observed: Set<string>): void {
+/** `facts` = data-warning facts gathered across parts; computed from `selected` when absent. */
+function notes(c: RunCtx, selected: EnrolmentRecord[], observed: Set<string>, facts?: DataFacts): void {
   if (
     (c.signals.includes("logged_in") || c.signals.includes("accessed")) &&
     selected.length >= 20 &&
@@ -544,9 +557,13 @@ function notes(c: RunCtx, selected: EnrolmentRecord[], observed: Set<string>): v
     );
   }
   c.warnings.push(
-    ...dataWarnings(
+    ...factWarnings(
       c.t,
-      selected.map((r) => r.person),
+      facts ??
+        dataFacts(
+          c.t,
+          selected.map((r) => r.person),
+        ),
     ),
   );
   const filterRegions = c.filters.include.region;

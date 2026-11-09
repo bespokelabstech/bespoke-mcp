@@ -82,7 +82,9 @@ function compileCondition(c: Condition): CompiledCondition {
     case "equals":
       return { c, test: (v) => v === values[0] };
     case "matches": {
-      const re = new RegExp(c.value as string);
+      // Values are lower-cased, so match case-insensitively: a pattern written with capitals
+      // (e.g. "PC SFLMS Live") must still match.
+      const re = new RegExp(c.value as string, "i");
       return { c, test: (v) => re.test(v) };
     }
   }
@@ -149,6 +151,17 @@ export function classify(a: AccountInput, tenant: TenantConfig): PersonView {
     emailKnown: Boolean(a.emailDomain),
     statusKnown: a.suspended === true || a.suspended === false,
   };
+}
+
+/**
+ * The identifier to show: the profile value, else the username (app accounts sign in with
+ * their Conso ID as username). Display only — never repaired, and saved-filter rules on
+ * `conso_id` still read the profile value alone.
+ */
+export function shownIdentifier(p: PersonView): { value: string; fromUsername: boolean } {
+  return p.identifier
+    ? { value: p.identifier, fromUsername: false }
+    : { value: p.username, fromUsername: true };
 }
 
 /** True if the account holds a learner role and no non-learner role in this course. */

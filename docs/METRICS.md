@@ -71,8 +71,10 @@ rule 5 reads "legacy username" as letters + optional digits, `_`, 3–5 characte
 **Not rules (BES-465):** duplicates count until suspended; "never logged in" is a status filter
 (here: `list_people` `where: {signal: logged_in, state: no}`); bad branch codes count.
 
-**Warnings:** if no account in an answer has a visible email domain (or suspension flag), the
-rule cannot apply and every answer says so. A Dealer Level outside the 4 dealer levels and COE
+**Warnings:** if any account in an answer has no visible email domain (or suspension flag),
+the rule cannot hide it and the answer says how many (Moodle shows emails only when an account
+allows it, unless the service role has `moodle/site:viewuseridentity`). Answers in parts carry
+these facts across parts, so the final part reports them. A Dealer Level outside the 4 dealer levels and COE
 is flagged (the glossary's "one of the 4 dealer levels" and rule 7 agree only while no other
 value exists — true on staging, 2026-11-09).
 
@@ -86,7 +88,7 @@ per first matching rule) and `counted`, in the answer's unit.
 | Region       | `Region_Dropdown`      | Verbatim; empty → `Not set`                                                                                             |
 | Dealer Level | `level`                | Verbatim; empty → `Not set`                                                                                             |
 | Branch       | `branch_code`          | Stored label verbatim (e.g. `QUEZON AVE (0032)`) plus parsed `branch_name`, `branch_code`; bare `0032` → name `Not set` |
-| Conso ID     | `dealer_conso_id`      | As stored (trimmed); empty → `Not set`. `username` is returned alongside                                                |
+| Conso ID     | `dealer_conso_id`      | As stored (trimmed); when empty, the username is shown with `conso_id_from_username: true` (display only)               |
 
 Look-alike values (`Visayas` next to `Visayas 1/2/3`) are separate values; responses add a note.
 

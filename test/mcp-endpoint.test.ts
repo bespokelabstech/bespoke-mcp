@@ -153,6 +153,7 @@ describe("POST /api/mcp", () => {
     expect(w).toMatch(/All-time only/);
     expect(w).toMatch(/stored on each profile/);
     expect(w).not.toMatch(/not visible|Unexpected/);
+    // every fixture account shows its email domain and status
     const sum = payload.data.rows.reduce((n: number, r: { enrolled: number }) => n + r.enrolled, 0);
     expect(sum).toBe(payload.data.totals.enrolled);
     expect(w).toMatch(/"Visayas", "Visayas 1", "Visayas 2" are separate values/);
@@ -202,7 +203,9 @@ describe("POST /api/mcp", () => {
     );
     const out = JSON.parse((body.result as { content: Array<{ text: string }> }).content[0]!.text);
     const w = out.warnings.join(" ");
-    expect(w).toMatch(/Email addresses are not visible .*"Internal email domain" was not applied/);
+    expect(w).toMatch(
+      /Email addresses were not visible for any accounts checked, so rule "Internal email domain"/,
+    );
     expect(w).toMatch(/Unexpected Dealer Level value\(s\) "Head Office"/);
   });
 
@@ -262,6 +265,43 @@ describe("POST /api/mcp", () => {
     expect(payload.warnings.join(" ")).toMatch(/Web only/);
   });
 
+  it("reports partly visible emails, and carries data warnings to the last part", async () => {
+    const { buildMcpHandler } = await import("@/core/server");
+    const { loadTenant } = await import("@/tenants/registry");
+    const { FixtureLearningAdapter, EDGE } = await import("@/connectors/fixture/adapter");
+    const tenant = loadTenant("gla", "staging");
+    const port = new FixtureLearningAdapter({ nowSec: Math.floor(Date.now() / 1000) });
+    port.people.find((p) => p.userId === EDGE.legacyFb)!.emailDomain = null; // hidden by the account's setting
+    port.people.find((p) => p.userId === EDGE.dealerAlnum)!.profile.level = "Head Office"; // an edge: last in order
+    const slow = port.listCourseEnrolmentsPage.bind(port);
+    port.listCourseEnrolmentsPage = async (...a) => (
+      await new Promise((r) => setTimeout(r, 450)),
+      slow(...a)
+    );
+    const h = buildMcpHandler(
+      {
+        tenant: { ...tenant, limits: { ...tenant.limits, requestBudgetMs: 5_000, participantsPageSize: 50 } },
+        env: "staging",
+        accessKeys: [KEY],
+        dataSource: { kind: "none" },
+      },
+      port,
+    );
+    const call = async (args: Record<string, unknown>) => {
+      const body = await rpcBody(await h(rpc("tools/call", { name: "query_metrics", arguments: args })));
+      return JSON.parse((body.result as { content: Array<{ text: string }> }).content[0]!.text);
+    };
+    const args = { group_by: ["course"], signals: ["logged_in"] };
+    const parts = [await call(args)];
+    while (!parts.at(-1).data.complete && parts.length < 15) {
+      parts.push(await call({ ...args, cursor: parts.at(-1).data.next_cursor }));
+    }
+    expect(parts.length).toBeGreaterThan(1);
+    const w = parts.at(-1).warnings.join(" ");
+    expect(w).toMatch(/Email addresses were not visible for \d+ of \d+ accounts checked/);
+    expect(w).toMatch(/Unexpected Dealer Level value\(s\) "Head Office"/);
+  }, 60_000);
+
   it("list_people: who has not accessed, accounts hidden by the saved filter, sorting", async () => {
     const notAccessed = await callTool(POST, "list_people", {
       course_id: 10,
@@ -297,6 +337,7 @@ describe("POST /api/mcp", () => {
   it("get_person: looks up the username as stored (no repair) and says which rules hide it", async () => {
     const { payload } = await callTool(POST, "get_person", { identifier: "003210000000" });
     expect(payload.data.person.conso_id).toBe("003210000000");
+    expect(payload.data.person.conso_id_from_username).toBeUndefined();
     expect(payload.data.person.valid).toBe(false); // the fixture's first dealer has a blank level
     expect(payload.data.person.not_valid_because).toEqual(["COE or blank Dealer Level"]);
     expect(payload.data.courses.length).toBeGreaterThan(0);

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { AppError } from "@/core/errors";
 import { buildEnvelope } from "@/domain/envelope";
 import { isAccessed, pct } from "@/domain/metrics";
-import { classify } from "@/domain/people";
+import { classify, shownIdentifier } from "@/domain/people";
 import { tenantCourses } from "@/domain/scope";
 import { formatInZone, inWindow, resolveWindow } from "@/domain/time";
 import type { ToolDeps } from "./runtime";
@@ -75,7 +75,8 @@ export function registerGetPerson(server: McpServer, deps: ToolDeps): void {
             person: {
               name: view.name,
               username: view.username,
-              conso_id: view.identifier ?? t.emptyValueLabel,
+              conso_id: shownIdentifier(view).value,
+              ...(shownIdentifier(view).fromUsername ? { conso_id_from_username: true } : {}),
               identifier_label: t.identity.label,
               ...(sf ? { valid: view.valid } : {}),
               ...(view.failed.length ? { not_valid_because: view.failed } : {}),

@@ -6,7 +6,7 @@ import { loadPersonCourses } from "@/domain/enrich";
 import { buildEnvelope } from "@/domain/envelope";
 import { compareValues, isAccessed, parseSort } from "@/domain/metrics";
 import type { Filters } from "@/domain/people";
-import { familyNotes } from "@/domain/people";
+import { familyNotes, shownIdentifier } from "@/domain/people";
 import type { EnrolmentRecord } from "@/domain/population";
 import { loadScope, loadScopePage, populationCounts, selectPopulation } from "@/domain/population";
 import { resolveCourseScope } from "@/domain/scope";
@@ -61,7 +61,7 @@ export function registerListPeople(server: McpServer, deps: ToolDeps): void {
     {
       title: `${v.personPlural} in a ${v.course}`,
       description:
-        `For one ${v.course.toLowerCase()}: the ${people} enrolled (name, username, ${t.identity.label}, valid or not, ` +
+        `For one ${v.course.toLowerCase()}: the ${people} enrolled (name, username, ${t.identity.label} — the username when the profile field is empty, flagged conso_id_from_username — valid or not, ` +
         `${t.dimensions.region.label}, ${t.dimensions.level.label}, ${t.dimensions.branch.label}, last sign-in, last web course access), ` +
         `with the same filters and defaults as query_metrics, a metric filter (e.g. who has not accessed), a name/ID search ` +
         `and sorting on any column (e.g. sort "-last_sign_in"). Also use it to find a ${v.person.toLowerCase()} by name, or ` +
@@ -257,7 +257,7 @@ async function sortedList(c: Ctx, warnings: string[]) {
       case "name":
         return r.person.name.toLowerCase();
       case "conso_id":
-        return r.person.identifier?.toLowerCase() ?? null;
+        return shownIdentifier(r.person).value.toLowerCase();
       case "region":
         return r.person.region.toLowerCase();
       case "branch":
@@ -383,7 +383,8 @@ function row(c: Ctx, r: EnrolmentRecord, progress: Progress | null) {
   return {
     name: r.person.name,
     username: r.person.username,
-    conso_id: r.person.identifier ?? t.emptyValueLabel,
+    conso_id: shownIdentifier(r.person).value,
+    ...(shownIdentifier(r.person).fromUsername ? { conso_id_from_username: true } : {}),
     valid: r.person.valid,
     ...(r.person.failed.length ? { not_valid_because: r.person.failed } : {}),
     region: r.person.region,

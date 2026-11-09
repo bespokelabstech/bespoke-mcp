@@ -123,6 +123,32 @@ describe("valid_dealers saved filter (BES-465 rules, provisional)", () => {
     expect(view({ userId: 1, profile: { dealer_conso_id: "N/A" } }).identifier).toBeNull();
   });
 
+  it("matches patterns case-insensitively, whatever case the rule is written in", async () => {
+    const { tenantConfigSchema } = await import("@/tenants/schema");
+    const custom = tenantConfigSchema.parse({
+      ...t,
+      savedFilters: {
+        f: { label: "F", hide: [{ field: "name", op: "matches", value: "PC SFLMS Live", label: "x" }] },
+      },
+      defaults: { savedFilter: "f" },
+    });
+    expect(
+      classify(account({ userId: 1, firstName: "pc sflms live", lastName: "2" }), custom).failed,
+    ).toEqual(["x"]);
+  });
+
+  it("shows the username as the Conso ID when the profile field is empty (display only)", async () => {
+    const { shownIdentifier } = await import("@/domain/people");
+    expect(shownIdentifier(view({ userId: 1, username: "077700099283" }))).toEqual({
+      value: "077700099283",
+      fromUsername: true,
+    });
+    expect(shownIdentifier(view({ userId: 1, profile: { dealer_conso_id: "088800099158" } }))).toEqual({
+      value: "088800099158",
+      fromUsername: false,
+    });
+  });
+
   it("records whether the LMS showed email and status", () => {
     const v = classify(account({ userId: 1 }), t);
     expect(v.emailKnown).toBe(false);
