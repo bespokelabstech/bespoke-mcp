@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { aggregate, finalize, mergePartials } from "@/domain/metrics";
-import { classify } from "@/domain/people";
+import { aggregate, finalize, mergePartials, sortMetricRows } from "@/domain/metrics";
+import { classify, NO_FILTERS } from "@/domain/people";
 import type { EnrolmentRecord } from "@/domain/population";
-import { loadScope, selectPopulation, statusCounts } from "@/domain/population";
+import { loadScope, populationCounts, selectPopulation } from "@/domain/population";
 import { EDGE, FixtureLearningAdapter } from "@/connectors/fixture/adapter";
 import type { Course, PersonCourse } from "@/ports/learning";
 import { account, glaStaging } from "./helpers";
@@ -12,7 +12,7 @@ const course = (id: number): Course => ({
   id,
   shortName: `C${id}`,
   fullName: `Course ${id}`,
-  categoryId: 1,
+  categoryId: id === 1 ? 5 : 6,
   visible: true,
   completionEnabled: true,
   startDate: null,
@@ -35,7 +35,7 @@ const rec = (
   lastSiteAccess: site,
 });
 
-// Dealer A (Visayas 1) has TWO accounts (same Conso ID, one with a dropped zero).
+// Dealer A (Visayas 1) has TWO accounts (same Conso ID, one with a dropped zero): they count separately.
 const A = course(1),
   B = course(2);
 const a1 = person(1, "099900077574", "Visayas 1");
@@ -51,30 +51,31 @@ const records: EnrolmentRecord[] = [
   rec(c, A, null, 900),
 ];
 const base = { window: null, personCourses: null, scores: null };
+const pc = (courseId: number, progressPct: number, completed: boolean): PersonCourse => ({
+  courseId,
+  fullName: "",
+  lastAccess: null,
+  progressPct,
+  completed,
+  completionEnabled: true,
+});
 
 describe("aggregate", () => {
-  it("people: duplicate accounts merge; access = most recent across accounts and courses", () => {
-    const rows = aggregate(records, { ...base, groupBy: ["region"], unit: "people" });
+  it("accounts: every account counts on its own (no merging); sign-in is per account", () => {
+    const rows = aggregate(records, { ...base, groupBy: ["region"], unit: "accounts" });
     const vis = rows.find((r) => r.group.region === "Visayas 1")!;
-    expect(vis.enrolled).toBe(2); // dealer A + dealer b, not 3 accounts
-    expect(vis.site_ever).toBe(1);
+    expect(vis.enrolled).toBe(3); // a1, a2 and b
+    expect(vis.login_ever).toBe(1);
     expect(vis.web_ever).toBe(1);
+    expect(vis.enrolments).toBe(5);
   });
 
-  it("enrolments: each account-course enrolment as Moodle records it (additive across parts)", () => {
+  it("enrolments: each account-course enrolment (additive across parts)", () => {
     const [tot] = aggregate(records, { ...base, groupBy: [], unit: "enrolments" });
-    expect(tot!.enrolled).toBe(6); // a1×1, a2×1, a1×2, b×1, b×2, c×1 — duplicates merge only in "people"
+    expect(tot!.enrolled).toBe(6);
   });
 
-  it("started = progress > 0 or completed; completion and score are enrolment-based", () => {
-    const pc = (courseId: number, progressPct: number, completed: boolean): PersonCourse => ({
-      courseId,
-      fullName: "",
-      lastAccess: null,
-      progressPct,
-      completed,
-      completionEnabled: true,
-    });
+  it("accessed, access rate, progress and avg. completion (÷ enrolled)", () => {
     const personCourses = new Map([
       [
         1,
@@ -83,6 +84,7 @@ describe("aggregate", () => {
           [2, pc(2, 100, true)],
         ]),
       ],
+      [2, new Map([[1, pc(1, 0, false)]])],
       [
         3,
         new Map([
@@ -90,7 +92,10 @@ describe("aggregate", () => {
           [2, pc(2, 0, false)],
         ]),
       ],
-      [4, new Map([[1, pc(1, 0, false)]])],
+      [
+        4,
+        new Map([[1, { ...pc(1, 0, false), completionEnabled: false, progressPct: null, completed: null }]]),
+      ],
     ]);
     const scores = new Map([
       [
@@ -101,69 +106,112 @@ describe("aggregate", () => {
         ]),
       ],
     ]);
-    const [row] = aggregate(records, { ...base, personCourses, scores, groupBy: [], unit: "people" });
-    const out = finalize(row!, ["started", "completion", "avg_score"], false, false);
-    expect(out.started).toEqual({ count: 1, rate_pct: 33.3, unknown: 0 });
-    // tracked: a×1 (the duplicate account adds nothing), a×2, b×1, b×2, c×1
-    expect(out.completion).toMatchObject({ tracked_enrolments: 5, completed: 1, completion_rate_pct: 20 });
+    const [row] = aggregate(records, { ...base, personCourses, scores, groupBy: [], unit: "accounts" });
+    const out = finalize(row!, ["accessed", "logged_in", "progress", "avg_score"], false, false);
+    expect(out.logged_in).toEqual({ count: 2, pct_of_enrolled: 50 });
+    // accessed: a1 only; logged in: a1 and c → access rate 1 / 2
+    expect(out.accessed).toEqual({ count: 1, access_rate_pct: 50, unknown: 0 });
+    // 6 enrolments, 1 completed; c's course has no completion tracking
+    expect(out.progress).toMatchObject({
+      enrolments: 6,
+      completed: 1,
+      avg_completion_pct: 16.7,
+      untracked_enrolments: 1,
+    });
+    expect(out.progress!.avg_progress_pct).toBe(25);
     expect(out.avg_score).toEqual({ graded_items: 2, avg_score_pct: 70 });
   });
 
+  it("with a date range, Logged in is windowed and the access rate is not computed", () => {
+    const personCourses = new Map([[1, new Map([[1, pc(1, 25, false)]])]]);
+    const [row] = aggregate(records, {
+      ...base,
+      personCourses,
+      groupBy: [],
+      unit: "accounts",
+      window: { from: 600, to: null, semantics: "accessed_since", description: "" },
+    });
+    const out = finalize(row!, ["logged_in", "accessed"], true, false);
+    expect(out.logged_in).toEqual({ count: 1, pct_of_enrolled: 25, ever: 2 });
+    expect(out.accessed!.access_rate_pct).toBeNull();
+  });
+
   it("partials from disjoint courses add up to the whole", () => {
-    const whole = aggregate(records, { ...base, groupBy: ["region"], unit: "enrolments" });
+    const opts = { ...base, groupBy: ["region" as const], unit: "enrolments" as const };
+    const whole = aggregate(records, opts);
     const p1 = aggregate(
       records.filter((r) => r.course.id === 1),
-      { ...base, groupBy: ["region"], unit: "enrolments" },
+      opts,
     );
     const p2 = aggregate(
       records.filter((r) => r.course.id === 2),
-      { ...base, groupBy: ["region"], unit: "enrolments" },
+      opts,
     );
-    const merged = mergePartials(p1, p2);
     const key = (r: { group: unknown }) => JSON.stringify(r.group);
-    expect(new Map(merged.map((r) => [key(r), r]))).toEqual(new Map(whole.map((r) => [key(r), r])));
+    expect(new Map(mergePartials(p1, p2).map((r) => [key(r), r]))).toEqual(
+      new Map(whole.map((r) => [key(r), r])),
+    );
   });
 
-  it("windows count the most recent access", () => {
-    const [row] = aggregate(records, {
+  it("groups by category", () => {
+    const rows = aggregate(records, {
       ...base,
-      groupBy: [],
-      unit: "people",
-      window: { from: 600, to: null, semantics: "accessed_since", description: "" },
+      groupBy: ["category"],
+      unit: "accounts",
+      categoryNames: new Map([[5, "Onboarding"]]),
     });
-    expect(finalize(row!, ["site_last_access"], true, false).site_last_access).toEqual({
-      ever: 2,
-      in_window: 1,
-      window_rate_pct: 33.3,
-    });
+    expect(rows.map((r) => r.group.category).sort((x, y) => x!.id - y!.id)).toEqual([
+      { id: 5, name: "Onboarding" },
+      { id: 6, name: null },
+    ]);
+  });
+});
+
+describe("sortMetricRows", () => {
+  const rows = aggregate(records, { ...base, groupBy: ["region"], unit: "accounts" }).map((r) =>
+    finalize(r, ["logged_in"], false),
+  );
+  it("sorts on any column in either direction, nulls last", () => {
+    expect(sortMetricRows(rows, "-enrolled").map((r) => r.group!.region)).toEqual([
+      "Visayas 1",
+      "Mega Manila",
+    ]);
+    expect(sortMetricRows(rows, "enrolled").map((r) => r.group!.region)).toEqual([
+      "Mega Manila",
+      "Visayas 1",
+    ]);
+    expect(sortMetricRows(rows, "-logged_in_pct").map((r) => r.group!.region)).toEqual([
+      "Mega Manila",
+      "Visayas 1",
+    ]);
+    expect(sortMetricRows(rows, "group").map((r) => r.group!.region)).toEqual(["Mega Manila", "Visayas 1"]);
   });
 });
 
 describe("loadScope on synthetic data", () => {
-  it("assigns every edge account the expected status", async () => {
+  it("applies the base scope and names the rules that hide each account", async () => {
     const port = new FixtureLearningAdapter({ nowSec: 1_800_000_000 });
-    const { records: all } = await loadScope(port, t, [port.courses[0]!], {});
-    const byUser = new Map(
-      all.map((r) => [r.person.userId, `${r.person.status}${r.person.reason ? `:${r.person.reason}` : ""}`]),
-    );
-    expect(byUser.get(EDGE.dealerAlnum)).toBe("person");
-    expect(byUser.get(EDGE.dupDropped0)).toBe("person");
-    expect(byUser.get(EDGE.legacyNone)).toBe("legacy");
-    expect(byUser.get(EDGE.legacyFb)).toBe("legacy");
-    expect(byUser.get(EDGE.legacyNl)).toBe("legacy");
-    expect(byUser.get(EDGE.staff)).toBe("excluded:staff");
-    expect(byUser.get(EDGE.dummyRepeat)).toBe("excluded:dummy");
-    expect(byUser.get(EDGE.dummyOnes)).toBe("excluded:dummy");
-    expect(byUser.get(EDGE.uat)).toBe("excluded:test");
-    expect(byUser.get(EDGE.teacher)).toBe("excluded:role");
-    expect(byUser.get(EDGE.manager)).toBe("excluded:role");
-    const counts = statusCounts(all, "people");
-    expect(counts.legacy).toBe(3);
-    expect(counts.excluded).toBe(6);
-    // the duplicate account merges into its dealer
-    const dealers = selectPopulation(all, ["person"]);
-    expect(new Set(dealers.map((r) => r.person.key)).size).toBe(counts.person);
-    const originalEnrolled = all.some((r) => r.person.userId === 1000);
-    expect(dealers.length).toBe(counts.person + (originalEnrolled ? 1 : 0));
+    const { records: all } = await loadScope(port, t, [port.courses[0]!], NO_FILTERS);
+    const byUser = new Map(all.map((r) => [r.person.userId, r.person]));
+    expect(byUser.has(EDGE.teacher)).toBe(false);
+    expect(byUser.has(EDGE.manager)).toBe(false);
+    for (const id of [EDGE.dealerAlnum, EDGE.legacyNone, EDGE.legacyFb, EDGE.legacyNl]) {
+      expect(byUser.get(id)!.failed).toEqual([]);
+    }
+    // copies dealer 1000's profile, whose Dealer Level is blank
+    expect(byUser.get(EDGE.dupDropped0)!.failed).toEqual(["COE or blank Dealer Level"]);
+    expect(byUser.get(EDGE.staff)!.failed).toEqual(["COE or blank Dealer Level"]);
+    expect(byUser.get(EDGE.dummyRepeat)!.failed).toEqual(["Test, training or admin username"]);
+    expect(byUser.get(EDGE.dummyOnes)!.failed).toEqual(["Test, training or admin username"]);
+    expect(byUser.get(EDGE.uat)!.failed).toEqual(["Dummy Conso ID"]);
+    expect(byUser.get(EDGE.internalEmail)!.failed).toEqual(["Internal email domain"]);
+    expect(byUser.get(EDGE.suspended)!.failed).toEqual(["Suspended account"]);
+    expect(byUser.get(EDGE.sampleName)!.failed).toEqual(["Test or dummy name"]);
+    expect(byUser.get(EDGE.blankName)!.failed).toEqual(["Placeholder name"]);
+    expect(byUser.get(EDGE.legacyName)!.failed).toEqual(["Placeholder name"]);
+    const counts = populationCounts(all, "accounts");
+    const hidden = Object.values(counts.notValid).reduce((a, b) => a + b, 0);
+    expect(counts.all - counts.valid).toBe(hidden);
+    expect(selectPopulation(all, true).length).toBe(counts.valid);
   });
 });

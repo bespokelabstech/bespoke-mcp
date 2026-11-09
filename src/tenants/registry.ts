@@ -29,6 +29,13 @@ export function loadTenant(tenantId: string, env: EnvironmentName): TenantConfig
       issues: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`),
     });
   }
+  const def0 = parsed.data.defaults.savedFilter;
+  if (def0 !== null && !parsed.data.savedFilters[def0]) {
+    throw new AppError(
+      "not_configured",
+      `Tenant "${tenantId}" default saved filter "${def0}" is not defined.`,
+    );
+  }
   if (!parsed.data.environments[env]) {
     throw new AppError("not_configured", `Tenant "${tenantId}" has no "${env}" environment.`);
   }

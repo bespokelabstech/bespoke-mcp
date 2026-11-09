@@ -52,17 +52,19 @@ app/api/mcp/route.ts
 
 General-purpose capabilities; titles and descriptions use the tenant's vocabulary.
 
-| Tool                    | Purpose                                                                                              |
-| ----------------------- | ---------------------------------------------------------------------------------------------------- |
-| `describe_capabilities` | Signals, dimensions, populations and limits with definitions and availability                        |
-| `list_courses`          | Course catalogue                                                                                     |
-| `list_dimension_values` | Region / level / branch values as stored, with counts                                                |
-| `query_metrics`         | Signals × grouping × filters × window × population; cost-aware, answers in parts via a signed cursor |
-| `list_people`           | People in one course, filterable by population, profile values, a signal state and search            |
-| `get_person`            | One person by identifier with every in-scope course                                                  |
+| Tool                    | Purpose                                                                                               |
+| ----------------------- | ----------------------------------------------------------------------------------------------------- |
+| `describe_capabilities` | BES-465 glossary with connector notes, saved filter, defaults, signals, sortable columns, limits      |
+| `list_courses`          | Course catalogue                                                                                      |
+| `list_dimension_values` | Region / level / branch values as stored, with counts                                                 |
+| `query_metrics`         | Signals × grouping × filters × date range × saved filter × sort; answers in parts via a signed cursor |
+| `list_people`           | Accounts in one course: same filter contract, a metric filter, search, sort on any column             |
+| `get_person`            | One account by username with every in-scope course                                                    |
 
-Metrics are built from named **signals** (`src/domain/signals.ts`) instead of one vague
-"accessed", because on GLA the mobile app does not update Moodle's per-course last access.
+Metric names, defaults, filters and sort follow BES-465 (ADR-011). Who counts = base scope
+(learner roles, `tenant.accounts`) + the default saved filter (`tenant.savedFilters`,
+`tenant.defaults`), evaluated in `src/domain/people.ts`; the filter contract is resolved in
+`src/tools/shared-schemas.ts`. The BES-465 glossary lives in `src/domain/glossary.ts`.
 
 ## Ports and connectors
 
@@ -133,9 +135,10 @@ upstream call counts — never argument values or results.
 - **App activity is invisible per course** except through progress/completion. Opening a
   course or partly viewing an activity in the app leaves no trace the API exposes.
 - **History:** only the last access is kept; past windows are labelled `last_access_in_range`.
-- **Per-person signals** (`started`, `completion`) need one call per person and run in
-  batches (≈ 0.5–1 s per person on staging at concurrency 2), so large scopes take several parts.
-  `list_people` filtered by `started` is still limited to 300 people.
+- **Per-account signals** (`accessed`, `progress`) need one call per account and run in
+  batches (≈ 0.5–1 s per account on staging at concurrency 2), so large scopes take several parts.
+  `list_people` filtered or sorted by `accessed`/`progress` is limited to 300 accounts.
 - **Org-wide distinct-people answers** across many courses may not fit one call.
 - A read-only Moodle plugin (aggregates, activity log, history) lifts all four — ROADMAP.
-- System-level roles are not visible through course data; staff are excluded by Dealer Level.
+- System-level roles are not visible through course data; COE staff are hidden by the
+  `valid_dealers` level rule.

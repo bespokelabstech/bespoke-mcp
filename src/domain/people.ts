@@ -1,17 +1,14 @@
-import type { DimensionId, TenantConfig } from "@/tenants/schema";
+import type { Condition, DimensionId, SavedFilterField, TenantConfig } from "@/tenants/schema";
 
 /**
- * Turning LMS accounts into business people (e.g. Dealers): identity status, identifier and
- * business attributes. Every rule comes from tenant config; nothing client-specific here.
+ * Turning LMS accounts into business accounts (e.g. Dealers): identity, business attributes and
+ * the saved-filter verdict (e.g. "Valid dealer"). Every rule comes from tenant config; nothing
+ * client-specific here. Each account counts on its own — accounts are never merged and
+ * identifiers are never repaired.
  *
  * Attribute values are taken VERBATIM from the profile (the LMS profile is the source of
- * truth). Empty values become the tenant's emptyValueLabel ("N/A").
+ * truth). Empty values become the tenant's emptyValueLabel (GLA: "Not set").
  */
-
-/** Exactly one per account. See docs/METRICS.md#population. */
-export type Status = "person" | "legacy" | "excluded";
-export type ExclusionReason = "role" | "test" | "staff" | "dummy";
-export const STATUSES: readonly Status[] = ["person", "legacy", "excluded"];
 
 export interface BranchValue {
   /** Stored value as shown in the LMS, e.g. "QUEZON AVE (0032)". */
@@ -22,18 +19,20 @@ export interface BranchValue {
 
 export interface PersonView {
   userId: number;
-  /** Counting key: the normalised identifier for `person` (merges duplicate accounts), else the account. */
-  key: string;
-  status: Status;
-  reason: ExclusionReason | null;
-  /** Normalised identifier when structurally valid, else the raw stored value (or null). */
+  username: string;
+  /** Identifier profile value as stored (trimmed); null when empty or a placeholder. */
   identifier: string | null;
-  /** True when the identifier was repaired (e.g. a dropped leading zero). */
-  identifierNormalised: boolean;
   name: string;
   region: string;
   level: string;
   branch: BranchValue;
+  /** Not hidden by the tenant's default saved filter (true when none is configured). */
+  valid: boolean;
+  /** Labels of the saved-filter rules that hide this account, in config order, de-duplicated. */
+  failed: string[];
+  /** Whether the LMS showed an email domain / suspension flag (rules on them need it). */
+  emailKnown: boolean;
+  statusKnown: boolean;
 }
 
 export interface AccountInput {
@@ -41,9 +40,11 @@ export interface AccountInput {
   username: string;
   firstName: string;
   lastName: string;
+  /** Custom profile fields (shortname -> raw value). */
   profile: Record<string, string>;
-  /** Course roles; omit for direct lookups (role rules then do not apply). */
-  courseRoles?: string[];
+  /** "@domain" of the email; null/omitted when not shown. */
+  emailDomain?: string | null | undefined;
+  suspended?: boolean | null | undefined;
 }
 
 const LABEL_RE = /^(.*) \(([0-9A-Za-z]+)\)$/; // mirrors local_profileform catalog::LABEL_RE
@@ -59,49 +60,68 @@ export function parseBranch(raw: string, format: "verbatim" | "name_with_code", 
   return { label: value, name: null, code: null };
 }
 
-/** Lower-case, trim and repair a dropped leading zero (11 → 12 digits) when configured. */
-export function normaliseIdentifier(raw: string, tenant: TenantConfig): { value: string; repaired: boolean } {
-  const v = raw.trim().toLowerCase();
-  const { padNumericFrom, padNumericTo } = tenant.identity;
-  if (padNumericFrom && padNumericTo && v.length === padNumericFrom && /^\d+$/.test(v)) {
-    return { value: v.padStart(padNumericTo, "0"), repaired: true };
-  }
-  return { value: v, repaired: false };
+interface CompiledCondition {
+  c: Condition;
+  test: (v: string) => boolean;
 }
-
 interface Compiled {
   placeholders: Set<string>;
-  valid: RegExp;
-  dummies: RegExp[];
-  staff: Set<string>;
+  hide: CompiledCondition[] | null;
 }
 const compiled = new WeakMap<TenantConfig, Compiled>();
-function rules(t: TenantConfig): Compiled {
-  let c = compiled.get(t);
-  if (!c) {
-    c = {
-      placeholders: new Set(t.placeholderValues.map((x) => x.trim().toLowerCase())),
-      valid: new RegExp(t.identity.validPattern),
-      dummies: t.eligibility.exclude.dummyIdentifierPatterns.map((p) => new RegExp(p)),
-      staff: new Set(t.eligibility.exclude.staffLevels.map((l) => l.trim().toLowerCase())),
-    };
-    compiled.set(t, c);
+
+const norm = (s: string) => s.trim().toLowerCase();
+
+function compileCondition(c: Condition): CompiledCondition {
+  const values = (Array.isArray(c.value) ? c.value : [c.value]).map(norm);
+  switch (c.op) {
+    case "in":
+      return { c, test: (v) => values.includes(v) };
+    case "not_in":
+      return { c, test: (v) => !values.includes(v) };
+    case "equals":
+      return { c, test: (v) => v === values[0] };
+    case "matches": {
+      // Values are lower-cased, so match case-insensitively: a pattern written with capitals
+      // (e.g. "PC SFLMS Live") must still match.
+      const re = new RegExp(c.value as string, "i");
+      return { c, test: (v) => re.test(v) };
+    }
   }
-  return c;
 }
 
-/**
- * Classify one account. Order matters:
- *   1. role      — not a learner role in this course, or an excluded role
- *   2. test      — explicitly excluded username / username range
- *   3. staff     — staff Dealer Level
- *   4. dummy     — identifier matches a placeholder pattern
- *   5. person    — profile identifier, else username, is structurally valid after normalisation
- *   6. legacy    — everything else (no identifier, or an old/malformed format)
- */
+function rules(t: TenantConfig): Compiled {
+  let r = compiled.get(t);
+  if (!r) {
+    const def = t.defaults.savedFilter ? t.savedFilters[t.defaults.savedFilter] : undefined;
+    r = {
+      placeholders: new Set(t.placeholderValues.map(norm)),
+      hide: def ? def.hide.map(compileCondition) : null,
+    };
+    compiled.set(t, r);
+  }
+  return r;
+}
+
+/** Saved-filter field values (see SAVED_FILTER_FIELDS): trimmed and lower-cased. */
+function fieldValues(
+  a: AccountInput,
+  identifier: string | null,
+  level: string,
+): Record<SavedFilterField, string> {
+  return {
+    username: norm(a.username),
+    conso_id: norm(identifier ?? ""),
+    name: norm(`${a.firstName} ${a.lastName}`).replace(/\s+/g, " "),
+    email: norm(a.emailDomain ?? ""),
+    status: a.suspended === true ? "suspended" : a.suspended === false ? "active" : "",
+    level: norm(level),
+  };
+}
+
+/** Build the business view of one account and evaluate the default saved filter. */
 export function classify(a: AccountInput, tenant: TenantConfig): PersonView {
   const r = rules(tenant);
-  const ex = tenant.eligibility.exclude;
   const d = tenant.dimensions;
   const empty = tenant.emptyValueLabel;
   // Placeholder text typed into a field ("n/a", "none", …) counts as empty everywhere.
@@ -109,93 +129,84 @@ export function classify(a: AccountInput, tenant: TenantConfig): PersonView {
     const v = a.profile[shortname]?.trim() ?? "";
     return r.placeholders.has(v.toLowerCase()) ? "" : v;
   };
-  const val = (shortname: string) => raw(shortname) || empty;
-  const base = {
-    userId: a.userId,
-    name: `${a.firstName} ${a.lastName}`.trim(),
-    region: val(d.region.profileField),
-    level: val(d.level.profileField),
-    branch: parseBranch(raw(d.branch.profileField), d.branch.format, empty),
-  };
-
-  // Candidate identifiers: profile field first, then the username.
-  const candidates = [raw(tenant.identity.profileField), a.username]
-    .filter((v) => v.trim() !== "" && !r.placeholders.has(v.trim().toLowerCase()))
-    .map((v) => normaliseIdentifier(v, tenant));
-  const valid = candidates.find((c) => r.valid.test(c.value));
-  const shown = valid ?? candidates[0] ?? null;
-  const account = `u:${a.userId}`;
-  const excluded = (reason: ExclusionReason): PersonView => ({
-    ...base,
-    key: account,
-    status: "excluded",
-    reason,
-    identifier: shown?.value ?? null,
-    identifierNormalised: shown?.repaired ?? false,
-  });
-
-  if (a.courseRoles) {
-    if (a.courseRoles.some((role) => ex.courseRoles.includes(role))) return excluded("role");
-    if (!a.courseRoles.some((role) => tenant.eligibility.requiredCourseRoles.includes(role))) {
-      return excluded("role");
+  const identifier = raw(tenant.identity.profileField) || null;
+  const level = raw(d.level.profileField);
+  const failed: string[] = [];
+  if (r.hide) {
+    const values = fieldValues(a, identifier, level);
+    for (const x of r.hide) {
+      if (x.test(values[x.c.field]) && !failed.includes(x.c.label)) failed.push(x.c.label);
     }
   }
-  const username = a.username.trim().toLowerCase();
-  if (ex.usernames.some((u) => u.toLowerCase() === username)) return excluded("test");
-  if (ex.usernameRanges.some(([lo, hi]) => inRange(username, lo, hi))) return excluded("test");
-  if (r.staff.has(base.level.toLowerCase())) return excluded("staff");
-  if (candidates.some((c) => r.dummies.some((re) => re.test(c.value)))) return excluded("dummy");
-  if (valid) {
-    return {
-      ...base,
-      key: `id:${valid.value}`,
-      status: "person",
-      reason: null,
-      identifier: valid.value,
-      identifierNormalised: valid.repaired,
-    };
-  }
   return {
-    ...base,
-    key: account,
-    status: "legacy",
-    reason: null,
-    identifier: shown?.value ?? null,
-    identifierNormalised: false,
+    userId: a.userId,
+    username: a.username,
+    identifier,
+    name: `${a.firstName} ${a.lastName}`.trim(),
+    region: raw(d.region.profileField) || empty,
+    level: level || empty,
+    branch: parseBranch(raw(d.branch.profileField), d.branch.format, empty),
+    valid: failed.length === 0,
+    failed,
+    emailKnown: Boolean(a.emailDomain),
+    statusKnown: a.suspended === true || a.suspended === false,
   };
 }
 
-function inRange(value: string, lo: string, hi: string): boolean {
-  const numeric = /^\d+$/;
-  if (
-    numeric.test(value) &&
-    numeric.test(lo) &&
-    numeric.test(hi) &&
-    value.length === lo.length &&
-    lo.length === hi.length
-  ) {
-    const v = BigInt(value);
-    return v >= BigInt(lo) && v <= BigInt(hi);
-  }
-  return value >= lo.toLowerCase() && value <= hi.toLowerCase();
+/**
+ * The identifier to show: the profile value, else the username (app accounts sign in with
+ * their Conso ID as username). Display only — never repaired, and saved-filter rules on
+ * `conso_id` still read the profile value alone.
+ */
+export function shownIdentifier(p: PersonView): { value: string; fromUsername: boolean } {
+  return p.identifier
+    ? { value: p.identifier, fromUsername: false }
+    : { value: p.username, fromUsername: true };
+}
+
+/** True if the account holds a learner role and no non-learner role in this course. */
+export function isLearner(courseRoles: string[], tenant: TenantConfig): boolean {
+  const { learnerRoles, nonLearnerRoles } = tenant.accounts;
+  return (
+    courseRoles.some((role) => learnerRoles.includes(role)) &&
+    !courseRoles.some((role) => nonLearnerRoles.includes(role))
+  );
 }
 
 // ---------------------------------------------------------------- filters & grouping
 
-export type Filters = Partial<Record<DimensionId, string[]>>;
+export type DimensionValues = Partial<Record<DimensionId, string[]>>;
 
-const norm = (s: string) => s.trim().toLowerCase();
+/** Include lists (keep only these values) and exclude lists (drop these values). */
+export interface Filters {
+  include: DimensionValues;
+  exclude: DimensionValues;
+}
 
-/** Case-insensitive exact match. Branch filters match the label, the name or the code. */
+export const NO_FILTERS: Filters = { include: {}, exclude: {} };
+
+function candidates(p: PersonView, dim: DimensionId, emptyLabel: string): string[] {
+  return dim === "branch"
+    ? [p.branch.label, p.branch.name ?? emptyLabel, p.branch.code ?? emptyLabel]
+    : [dim === "region" ? p.region : p.level];
+}
+
+/**
+ * Case-insensitive exact match. Branch values match the label, the name or the code.
+ * An account is kept when it matches every non-empty include list and no exclude list.
+ */
 export function matchesFilters(p: PersonView, filters: Filters, emptyLabel: string): boolean {
-  for (const [dim, wanted] of Object.entries(filters) as Array<[DimensionId, string[] | undefined]>) {
+  for (const [dim, wanted] of Object.entries(filters.include) as Array<[DimensionId, string[] | undefined]>) {
     if (!wanted || wanted.length === 0) continue;
     const want = new Set(wanted.map(norm));
-    const candidates =
-      dim === "branch"
-        ? [p.branch.label, p.branch.name ?? emptyLabel, p.branch.code ?? emptyLabel]
-        : [dim === "region" ? p.region : p.level];
-    if (!candidates.some((c) => want.has(norm(c)))) return false;
+    if (!candidates(p, dim, emptyLabel).some((c) => want.has(norm(c)))) return false;
+  }
+  for (const [dim, unwanted] of Object.entries(filters.exclude) as Array<
+    [DimensionId, string[] | undefined]
+  >) {
+    if (!unwanted || unwanted.length === 0) continue;
+    const drop = new Set(unwanted.map(norm));
+    if (candidates(p, dim, emptyLabel).some((c) => drop.has(norm(c)))) return false;
   }
   return true;
 }

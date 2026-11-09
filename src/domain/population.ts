@@ -1,15 +1,15 @@
 import { mapLimit } from "@/core/concurrency";
-import type { Course, Enrolment, LearningDataPort } from "@/ports/learning";
+import type { AccountProfile, Course, Enrolment, LearningDataPort } from "@/ports/learning";
 import type { TenantConfig } from "@/tenants/schema";
-import type { Filters, PersonView, Status } from "./people";
-import { classify, matchesFilters } from "./people";
+import type { Filters, PersonView } from "./people";
+import { classify, isLearner, matchesFilters } from "./people";
 
 /**
- * Loading the population behind a question: who is enrolled in the in-scope courses, with
- * their status and business attributes. Always pulled live from the LMS.
+ * Loading the population behind a question: the learner accounts enrolled in the in-scope
+ * courses, with their business attributes and saved-filter verdict. Always pulled live.
  */
 
-/** One account's active enrolment in one in-scope course. */
+/** One learner account's active enrolment in one in-scope course. */
 export interface EnrolmentRecord {
   person: PersonView;
   course: Course;
@@ -19,8 +19,9 @@ export interface EnrolmentRecord {
 
 /**
  * Two passes: (1) enrolments per course without profile fields; (2) profiles once per account.
- * Returns every enrolment that matches the dimension filters, of ANY status — callers select
- * the population and report the status counts.
+ * Returns every LEARNER enrolment that matches the dimension filters, valid or not — callers
+ * apply the saved filter and report the population counts. Non-learner enrolments (trainers,
+ * admins) are dropped here: the base scope is always applied.
  */
 export interface ScopeData {
   records: EnrolmentRecord[];
@@ -37,10 +38,11 @@ export async function loadScope(
   const perCourse = await mapLimit(courses, tenant.limits.upstreamConcurrency, (c) =>
     port.listCourseEnrolments(c.id),
   );
-  const profiles = await port.getProfiles([...new Set(perCourse.flat().map((e) => e.userId))]);
+  const learners = perCourse.map((rows) => rows.filter((e) => isLearner(e.courseRoles, tenant)));
+  const profiles = await port.getProfiles([...new Set(learners.flat().map((e) => e.userId))]);
   const out: ScopeData = { records: [], observedRegions: new Set() };
   const views = new Map<number, PersonView>();
-  courses.forEach((course, i) => addRecords(out, views, course, perCourse[i]!, profiles, tenant, filters));
+  courses.forEach((course, i) => addRecords(out, views, course, learners[i]!, profiles, tenant, filters));
   return out;
 }
 
@@ -51,7 +53,7 @@ export interface PageData extends ScopeData {
 
 /**
  * One page of one course (for answers in parts): the unit of work is small enough to fit a
- * call even for very large courses. Profiles are fetched for this page's accounts only.
+ * call even for very large courses. Profiles are fetched for this page's learners only.
  */
 export async function loadScopePage(
   port: LearningDataPort,
@@ -61,9 +63,10 @@ export async function loadScopePage(
   filters: Filters,
 ): Promise<PageData> {
   const page = await port.listCourseEnrolmentsPage(course.id, offset, tenant.limits.participantsPageSize);
-  const profiles = await port.getProfiles(page.rows.map((e) => e.userId));
+  const learners = page.rows.filter((e) => isLearner(e.courseRoles, tenant));
+  const profiles = await port.getProfiles(learners.map((e) => e.userId));
   const out: ScopeData = { records: [], observedRegions: new Set() };
-  addRecords(out, new Map(), course, page.rows, profiles, tenant, filters);
+  addRecords(out, new Map(), course, learners, profiles, tenant, filters);
   return { ...out, done: page.done };
 }
 
@@ -72,20 +75,20 @@ function addRecords(
   views: Map<number, PersonView>,
   course: Course,
   enrolments: Enrolment[],
-  profiles: Map<number, Record<string, string>>,
+  profiles: Map<number, AccountProfile>,
   tenant: TenantConfig,
   filters: Filters,
 ): void {
   for (const e of enrolments) {
-    let view = views.get(e.userId);
-    if (!view) {
-      view = classify({ ...e, profile: profiles.get(e.userId) ?? {} }, tenant);
-      views.set(e.userId, view);
+    let person = views.get(e.userId);
+    if (!person) {
+      const p = profiles.get(e.userId);
+      person = classify(
+        { ...e, profile: p?.fields ?? {}, emailDomain: p?.emailDomain, suspended: p?.suspended },
+        tenant,
+      );
+      views.set(e.userId, person);
     }
-    // Roles are per course: the same account can be a learner here and a teacher elsewhere.
-    const person: PersonView = hasLearnerRole(e.courseRoles, tenant)
-      ? view
-      : { ...view, status: "excluded", reason: "role", key: `u:${e.userId}` };
     out.observedRegions.add(person.region);
     if (!matchesFilters(person, filters, tenant.emptyValueLabel)) continue;
     out.records.push({
@@ -97,42 +100,53 @@ function addRecords(
   }
 }
 
-function hasLearnerRole(roles: string[], tenant: TenantConfig): boolean {
-  const { requiredCourseRoles, exclude } = tenant.eligibility;
-  return (
-    !roles.some((r) => exclude.courseRoles.includes(r)) && roles.some((r) => requiredCourseRoles.includes(r))
-  );
-}
-
-export type StatusCounts = Record<Status, number>;
-
 /**
- * Status counts in the given unit: distinct people (duplicate accounts of a Dealer merge) or
- * enrolments (account × course, as Moodle records them — additive across parts).
+ * Population counts in the answer's unit: all accounts in scope, how many pass the saved filter,
+ * and why the rest do not (first failed condition per account). Additive for enrolments.
  */
-export function statusCounts(records: EnrolmentRecord[], unit: "people" | "enrolments"): StatusCounts {
-  const seen: Record<Status, Set<string>> = { person: new Set(), legacy: new Set(), excluded: new Set() };
-  for (const r of records) {
-    seen[r.person.status].add(unit === "people" ? r.person.key : enrolmentKey(r));
-  }
-  return { person: seen.person.size, legacy: seen.legacy.size, excluded: seen.excluded.size };
+export interface PopulationCounts {
+  all: number;
+  valid: number;
+  /** condition label -> count */
+  notValid: Record<string, number>;
 }
 
-export function selectPopulation(records: EnrolmentRecord[], statuses: readonly Status[]): EnrolmentRecord[] {
-  const keep = new Set(statuses);
-  return records.filter((r) => keep.has(r.person.status));
+export function emptyCounts(): PopulationCounts {
+  return { all: 0, valid: 0, notValid: {} };
+}
+
+export function populationCounts(
+  records: EnrolmentRecord[],
+  unit: "accounts" | "enrolments",
+): PopulationCounts {
+  const seen = new Set<string>();
+  const out = emptyCounts();
+  for (const r of records) {
+    const k = unit === "accounts" ? `u:${r.person.userId}` : enrolmentKey(r);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.all++;
+    if (r.person.valid) out.valid++;
+    else {
+      const why = r.person.failed[0]!;
+      out.notValid[why] = (out.notValid[why] ?? 0) + 1;
+    }
+  }
+  return out;
+}
+
+export function addCounts(a: PopulationCounts, b: PopulationCounts): PopulationCounts {
+  const notValid = { ...a.notValid };
+  for (const [k, n] of Object.entries(b.notValid)) notValid[k] = (notValid[k] ?? 0) + n;
+  return { all: a.all + b.all, valid: a.valid + b.valid, notValid };
+}
+
+/** validOnly = keep accounts passing the saved filter; otherwise every account in scope. */
+export function selectPopulation(records: EnrolmentRecord[], validOnly: boolean): EnrolmentRecord[] {
+  return validOnly ? records.filter((r) => r.person.valid) : records;
 }
 
 /** One account's enrolment in one course. */
 export function enrolmentKey(r: EnrolmentRecord): string {
   return `u:${r.person.userId}:${r.course.id}`;
-}
-
-/**
- * Accounts merged into another account of the same person (same identifier) — the
- * difference between counted accounts and counted people. Shown so totals are explainable.
- */
-export function mergedDuplicateAccounts(records: EnrolmentRecord[]): number {
-  const people = records.filter((r) => r.person.status === "person");
-  return new Set(people.map((r) => r.person.userId)).size - new Set(people.map((r) => r.person.key)).size;
 }

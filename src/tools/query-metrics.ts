@@ -6,44 +6,58 @@ import { cursorFits, decodeCursor, encodeCursor, queryHash } from "@/core/cursor
 import { AppError, isOutOfTime } from "@/core/errors";
 import { loadPersonCourses, loadScores } from "@/domain/enrich";
 import { buildEnvelope } from "@/domain/envelope";
-import type { AggregateInput, GroupDim, GroupKey, PartialRow, Unit } from "@/domain/metrics";
-import { aggregate, emptyPartial, finalize, mergePartials, NUMERIC_FIELDS, sortRows } from "@/domain/metrics";
-import { familyNotes } from "@/domain/people";
-import type { EnrolmentRecord, StatusCounts } from "@/domain/population";
+import type { AggregateInput, GroupDim, GroupKey, MetricSortKey, PartialRow, Unit } from "@/domain/metrics";
 import {
+  aggregate,
+  emptyPartial,
+  finalize,
+  METRIC_SORT_KEYS,
+  mergePartials,
+  NUMERIC_FIELDS,
+  parseSort,
+  sortMetricRows,
+} from "@/domain/metrics";
+import type { Filters } from "@/domain/people";
+import { familyNotes } from "@/domain/people";
+import type { EnrolmentRecord, PopulationCounts } from "@/domain/population";
+import {
+  addCounts,
+  emptyCounts,
   loadScope,
   loadScopePage,
-  mergedDuplicateAccounts,
+  populationCounts,
   selectPopulation,
-  statusCounts,
 } from "@/domain/population";
 import { resolveCourseScope } from "@/domain/scope";
 import type { SignalId } from "@/domain/signals";
-import { DEFAULT_SIGNALS, SIGNALS } from "@/domain/signals";
+import { DEFAULT_SIGNALS, PER_PERSON_SIGNALS, SIGNALS } from "@/domain/signals";
 import type { AccessWindow } from "@/domain/time";
 import { resolveWindow } from "@/domain/time";
 import type { Course, LearningDataPort } from "@/ports/learning";
 import type { TenantConfig } from "@/tenants/schema";
+import type { DataFacts } from "./notes";
+import { dataFacts, emptyFacts, factWarnings, mergeFacts, regionSourceNote } from "./notes";
 import type { ToolDeps } from "./runtime";
 import { READ_ONLY_ANNOTATIONS, remainingBudgetMs, requireLearning, runTool } from "./runtime";
 import {
+  excludeField,
   filtersField,
-  labelledCounts,
-  populationField,
+  populationOut,
+  resolveFilters,
   scopeFields,
   signalsField,
-  toStatuses,
+  validOnlyField,
   windowFields,
 } from "./shared-schemas";
 
-const PER_PERSON: SignalId[] = ["started", "completion"];
+const SORT_VALUES = Object.keys(METRIC_SORT_KEYS).flatMap((k) => [k, `-${k}`]) as [string, ...string[]];
 
 /**
  * Three ways to answer, chosen automatically:
  *  - single: enrolment-level or people-level without per-person signals, fits one call.
  *  - pages:  enrolment-level, no per-person signals — work unit = one page of one course, so
  *            even very large courses split across calls. Results are additive.
- *  - people: per-person signals (started, completion) — work unit = a batch of people (one LMS
+ *  - people: per-person signals (accessed, progress) — work unit = a batch of accounts (one LMS
  *            call each covers all their courses). Finishes in one call when the scope is small.
  * Parts continue via a signed cursor carrying position and compact running sums; nothing is stored.
  */
@@ -55,10 +69,11 @@ type PagesState = {
   cid: number | null;
   off: number;
   acc: Packed[];
-  cur: Packed[];
   tot: Packed;
-  pop: StatusCounts;
+  pop: PopulationCounts;
   obs: string[];
+  /** Data-warning facts gathered so far (see notes.ts). */
+  df: DataFacts;
 };
 type PeopleState = { m: "people"; after: string | null; acc: Packed[]; tot: Packed };
 
@@ -66,25 +81,33 @@ export function registerQueryMetrics(server: McpServer, deps: ToolDeps): void {
   const t = deps.tenant;
   const v = t.vocabulary;
   const people = v.personPlural.toLowerCase();
-  const inputSchema = z.object({
+  const inputSchema = z.strictObject({
     ...scopeFields(t),
     filters: filtersField(t),
-    population: populationField(t),
+    exclude: excludeField(t),
+    valid_only: validOnlyField(t),
     group_by: z
-      .array(z.enum(["region", "level", "branch", "course"]))
+      .array(z.enum(["region", "level", "branch", "course", "category"]))
       .max(2)
       .default([])
       .describe("Zero, one or two dimensions to group by. Empty = totals only."),
     count_by: z
-      .enum(["people", "enrolments"])
-      .default("people")
+      .enum(["accounts", "enrolments"])
+      .default("accounts")
       .describe(
-        `people = each ${v.person.toLowerCase()} once per group (duplicate accounts with the same ${t.identity.label} merge); ` +
-          `enrolments = each account-${v.course.toLowerCase()} enrolment as Moodle records it. Grouping by course always counts enrolments.`,
+        `accounts = each account once per group (every account counts on its own); ` +
+          `enrolments = each account-${v.course.toLowerCase()} enrolment. Grouping by ${v.course.toLowerCase()} always counts enrolments.`,
       ),
     signals: signalsField,
     ...windowFields(t),
-    limit: z.number().int().min(1).max(500).default(50).describe("Max rows returned (largest groups first)."),
+    sort: z
+      .enum(SORT_VALUES)
+      .default("-enrolled")
+      .describe(
+        "Sort rows on any column; prefix '-' for descending. Default -enrolled (largest first). " +
+          "Columns other than enrolled/group need their metric in signals.",
+      ),
+    limit: z.number().int().min(1).max(500).default(50).describe("Max rows returned (after sorting)."),
     cursor: z
       .string()
       .max(12_000)
@@ -97,10 +120,11 @@ export function registerQueryMetrics(server: McpServer, deps: ToolDeps): void {
     {
       title: `${v.person} engagement metrics`,
       description:
-        `Count ${people} and their engagement signals (started, completion, app/site access, web course access, average score), ` +
-        `grouped by ${t.dimensions.region.label}, ${t.dimensions.level.label}, ${t.dimensions.branch.label} and/or ${v.course}. ` +
-        `Large questions are answered in parts: while complete=false, call again with the same arguments plus next_cursor. ` +
-        `With group_by course and no per-person signals, each part's course rows are final; otherwise rows and totals come with the last part. ` +
+        `Count ${people} and their metrics (Enrolled, Logged in, Accessed, Access rate, Progress, Completed, Avg. completion, ` +
+        `web course access, average score), grouped by ${t.dimensions.region.label}, ${t.dimensions.level.label}, ` +
+        `${t.dimensions.branch.label}, ${v.course} and/or category. Defaults: valid dealers only (see describe_capabilities), ` +
+        `every other filter "all", largest groups first. Large questions are answered in parts: while complete=false, ` +
+        `call again with the same arguments plus next_cursor; rows and totals come with the last part. ` +
         `Report numbers exactly as returned; never recompute or estimate.`,
       inputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
@@ -112,12 +136,17 @@ export function registerQueryMetrics(server: McpServer, deps: ToolDeps): void {
         const window = resolveWindow(args, t.timezone, now);
         const groupBy = args.group_by as GroupDim[];
         const unit: Unit = groupBy.includes("course") ? "enrolments" : args.count_by;
+        const resolved = resolveFilters(args, t);
         const courses = await resolveCourseScope(port, t, args);
         const warnings: string[] = [];
         const skipped: Array<{ signal: SignalId; reason: string }> = [];
 
         let signals: SignalId[] = [...new Set(args.signals ?? DEFAULT_SIGNALS)];
-        const wantsPerPerson = signals.some((s) => PER_PERSON.includes(s));
+        const sortSignal = METRIC_SORT_KEYS[parseSort<MetricSortKey>(args.sort).key];
+        if (sortSignal && !signals.includes(sortSignal)) {
+          throw new AppError("invalid_input", `sort "${args.sort}" needs "${sortSignal}" in signals.`);
+        }
+        const wantsPerPerson = signals.some((s) => PER_PERSON_SIGNALS.includes(s));
         if (signals.includes("avg_score") && !(await port.capabilities()).grades) {
           signals = signals.filter((s) => s !== "avg_score");
           skipped.push({
@@ -126,15 +155,25 @@ export function registerQueryMetrics(server: McpServer, deps: ToolDeps): void {
           });
         } else if (signals.includes("avg_score") && wantsPerPerson) {
           // Grade reports are per course (all users at once); repeating them in every
-          // people batch would consume the time budget. avg_score is enrolment-based anyway.
+          // account batch would consume the time budget. avg_score is enrolment-based anyway.
           signals = signals.filter((s) => s !== "avg_score");
           skipped.push({
             signal: "avg_score",
-            reason: "Ask for avg_score in a separate query without started/completion.",
+            reason: "Ask for avg_score in a separate query without accessed/progress.",
           });
         }
+        if (sortSignal === "avg_score" && !signals.includes("avg_score")) {
+          throw new AppError(
+            "invalid_input",
+            "sort on avg_score is not possible here: avg_score was skipped.",
+          );
+        }
         if (signals.includes("web_course_access")) warnings.push(SIGNALS.web_course_access.caveat!);
+        if (window && signals.includes("accessed")) warnings.push(SIGNALS.accessed.caveat!);
         if (window?.semantics === "last_access_in_range") warnings.push(window.description);
+        const categoryNames = groupBy.includes("category")
+          ? new Map((await port.listCategories()).map((x) => [x.id, x.name]))
+          : undefined;
 
         const c: RunCtx = {
           deps,
@@ -143,12 +182,14 @@ export function registerQueryMetrics(server: McpServer, deps: ToolDeps): void {
           args,
           courses,
           coursesById: new Map(courses.map((x) => [x.id, x])),
+          categoryNames,
           groupBy,
           unit,
           window,
           signals,
           warnings,
-          statuses: toStatuses(args.population, t),
+          filters: resolved.filters,
+          validOnly: resolved.validOnly,
           qh: queryHash(args),
         };
         const prev = args.cursor ? decodeCursor(args.cursor, deps.cursorSecret, c.qh) : null;
@@ -164,7 +205,7 @@ export function registerQueryMetrics(server: McpServer, deps: ToolDeps): void {
           source: port.source,
           nowSec: now,
           courses,
-          filters: args.filters,
+          filters: resolved.applied,
           window,
           warnings,
           data: { ...result, skipped_signals: skipped.length ? skipped : undefined },
@@ -179,12 +220,15 @@ interface RunCtx {
   t: TenantConfig;
   args: {
     limit: number;
+    sort: string;
     cursor?: string | undefined;
     filters?: Record<string, string[] | undefined> | undefined;
   };
   courses: Course[];
   coursesById: Map<number, Course>;
-  statuses: ReturnType<typeof toStatuses>;
+  categoryNames: Map<number, string> | undefined;
+  filters: Filters;
+  validOnly: boolean;
   groupBy: GroupDim[];
   unit: Unit;
   window: AccessWindow | null;
@@ -195,59 +239,63 @@ interface RunCtx {
 
 // ---------------------------------------------------------------- single
 
-/** People-level counts without per-person signals: the whole scope must load in one call. */
+/** Account-level counts without per-person signals: the whole scope must load in one call. */
 async function runSingle(c: RunCtx) {
   if (c.args.cursor)
     throw new AppError("invalid_input", "This query is answered in one part; remove the cursor.");
-  const { observed, pop, selected, merged } = await loadWholeScope(c);
+  const { observed, pop, selected } = await loadWholeScope(c);
   const scores = await maybeScores(c, c.courses);
-  const opts: Omit<AggregateInput, "groupBy"> = {
-    unit: c.unit,
-    window: c.window,
-    personCourses: null,
-    scores,
-  };
-  const rows = sortRows(aggregate(selected, { ...opts, groupBy: c.groupBy }));
+  const opts = aggOpts(c, null, scores);
+  const rows = aggregate(selected, { ...opts, groupBy: c.groupBy });
   const tot = aggregate(selected, { ...opts, groupBy: [] })[0] ?? emptyPartial();
   notes(c, selected, observed);
-  return finalAnswer(c, rows, tot, pop, merged);
+  return finalAnswer(c, rows, tot, pop);
+}
+
+function aggOpts(
+  c: RunCtx,
+  personCourses: AggregateInput["personCourses"],
+  scores: AggregateInput["scores"],
+  unit: Unit = c.unit,
+): Omit<AggregateInput, "groupBy"> {
+  return { unit, window: c.window, personCourses, scores, categoryNames: c.categoryNames };
 }
 
 async function loadWholeScope(c: RunCtx) {
   let scope;
   try {
-    scope = await loadScope(c.port, c.t, c.courses, c.args.filters ?? {});
+    scope = await loadScope(c.port, c.t, c.courses, c.filters);
   } catch (err) {
     if (err instanceof AppError && err.code === "scope_too_large") {
       throw new AppError(
         "scope_too_large",
         `Loading every ${c.t.vocabulary.person.toLowerCase()} across ${c.courses.length} ${c.t.vocabulary.coursePlural.toLowerCase()} does not fit one call. ` +
           "Narrow it (fewer courses or a region/level/branch filter), or use count_by='enrolments' with " +
-          "site_last_access / web_course_access / avg_score, which is answered in parts.",
+          "logged_in / web_course_access / avg_score, which is answered in parts.",
       );
     }
     throw err;
   }
-  const pop = statusCounts(scope.records, c.unit);
-  const selected = selectPopulation(scope.records, c.statuses);
-  const merged = c.unit === "people" ? mergedDuplicateAccounts(scope.records) : 0;
-  return { observed: scope.observedRegions, pop, selected, merged };
+  const pop = populationCounts(scope.records, c.unit);
+  const selected = selectPopulation(scope.records, c.validOnly);
+  return { observed: scope.observedRegions, pop, selected };
 }
 
 // ---------------------------------------------------------------- people
 
 /**
- * Per-person signals in batches of people. The person list is re-derived live each call and
- * resumption is by the LAST PROCESSED counting key (not an index), so people added or removed
- * between parts never shift the position. Duplicate accounts share a key and stay together.
+ * Per-person signals in batches of accounts. The account list is re-derived live each call and
+ * resumption is by the LAST PROCESSED account key (not an index), so accounts added or removed
+ * between parts never shift the position.
  */
 async function runPeople(c: RunCtx, prev: PeopleState | undefined) {
-  const { observed, pop, selected, merged } = await loadWholeScope(c);
+  const { observed, pop, selected } = await loadWholeScope(c);
   const byKey = new Map<string, EnrolmentRecord[]>();
   for (const r of selected) {
-    const list = byKey.get(r.person.key);
+    const key = `u:${String(r.person.userId).padStart(12, "0")}`;
+    const list = byKey.get(key);
     if (list) list.push(r);
-    else byKey.set(r.person.key, [r]);
+    else byKey.set(key, [r]);
   }
   const keys = [...byKey.keys()].sort();
   const state = {
@@ -271,12 +319,7 @@ async function runPeople(c: RunCtx, prev: PeopleState | undefined) {
       if (processed > 0 && isOutOfTime(err)) break;
       throw err;
     }
-    const opts: Omit<AggregateInput, "groupBy"> = {
-      unit: c.unit,
-      window: c.window,
-      personCourses,
-      scores: null,
-    };
+    const opts = aggOpts(c, personCourses, null);
     state.acc = mergePartials(state.acc, aggregate(recs, { ...opts, groupBy: c.groupBy }));
     state.tot = mergePartials([state.tot], aggregate(recs, { ...opts, groupBy: [] }))[0] ?? state.tot;
     idx += slice.length;
@@ -291,10 +334,10 @@ async function runPeople(c: RunCtx, prev: PeopleState | undefined) {
       });
   }
   notes(c, selected, observed);
-  const progress = { people_done: idx, people_total: keys.length };
-  if (idx >= keys.length) return { ...finalAnswer(c, sortRows(state.acc), state.tot, pop, merged), progress };
+  const progress = { accounts_done: idx, accounts_total: keys.length };
+  if (idx >= keys.length) return { ...finalAnswer(c, state.acc, state.tot, pop), progress };
   c.warnings.push(
-    `Partial answer: ${idx} of ${keys.length} ${c.t.vocabulary.personPlural.toLowerCase()} processed. ` +
+    `Partial answer: ${idx} of ${keys.length} accounts processed. ` +
       "Call query_metrics again with the same arguments and next_cursor.",
   );
   const next: PeopleState = {
@@ -327,18 +370,16 @@ function upperBound(keys: string[], after: string): number {
 
 // ---------------------------------------------------------------- pages
 
-/** Enrolment-level answers, one page of one course at a time. */
+/** Enrolment-level answers, one page of one course at a time. Rows come with the last part. */
 async function runPages(c: RunCtx, prev: PagesState | undefined, doneIds: number[]) {
-  const byCourse = c.groupBy.includes("course");
   let cid = prev?.cid ?? null;
   let off = prev?.off ?? 0;
   let acc = prev ? unpackRows(c, prev.acc) : [];
-  let cur = prev ? unpackRows(c, prev.cur) : [];
   let tot = prev ? unpackRow(c, prev.tot, []) : emptyPartial();
-  let pop: StatusCounts = prev?.pop ?? { person: 0, legacy: 0, excluded: 0 };
+  let pop: PopulationCounts = prev?.pop ?? emptyCounts();
   const observed = new Set<string>(prev?.obs ?? []);
+  let facts: DataFacts = prev?.df ?? emptyFacts();
   const done = new Set(doneIds);
-  const pageRows: PartialRow[] = [];
   const seen: EnrolmentRecord[] = [];
   const scoresByCourse = new Map<number, Awaited<ReturnType<typeof maybeScores>>>();
   const snapshot = (): PagesState => ({
@@ -346,10 +387,10 @@ async function runPages(c: RunCtx, prev: PagesState | undefined, doneIds: number
     cid,
     off,
     acc: packRows(c, acc),
-    cur: packRows(c, cur),
     tot: packRow(c, tot, []),
     pop,
     obs: [...observed],
+    df: facts,
   });
   let pages = 0;
   const started = Date.now();
@@ -359,7 +400,6 @@ async function runPages(c: RunCtx, prev: PagesState | undefined, doneIds: number
     if (cid !== course.id) {
       cid = course.id;
       off = 0;
-      cur = [];
     }
     let finished = false;
     while (!finished) {
@@ -368,7 +408,7 @@ async function runPages(c: RunCtx, prev: PagesState | undefined, doneIds: number
       let scores = scoresByCourse.get(course.id) ?? null;
       try {
         assertWithinBudget();
-        page = await loadScopePage(c.port, c.t, course, off, c.args.filters ?? {});
+        page = await loadScopePage(c.port, c.t, course, off, c.filters);
         if (!scoresByCourse.has(course.id)) {
           scores = await maybeScores(c, [course]);
           scoresByCourse.set(course.id, scores);
@@ -384,32 +424,25 @@ async function runPages(c: RunCtx, prev: PagesState | undefined, doneIds: number
         throw err;
       }
       page.observedRegions.forEach((r) => observed.add(r));
-      const p = statusCounts(page.records, "enrolments");
-      pop = {
-        person: pop.person + p.person,
-        legacy: pop.legacy + p.legacy,
-        excluded: pop.excluded + p.excluded,
-      };
-      const selected = selectPopulation(page.records, c.statuses);
+      pop = addCounts(pop, populationCounts(page.records, "enrolments"));
+      const selected = selectPopulation(page.records, c.validOnly);
       seen.push(...selected);
-      const opts: Omit<AggregateInput, "groupBy"> = {
-        unit: "enrolments",
-        window: c.window,
-        personCourses: null,
-        scores,
-      };
-      const part = aggregate(selected, { ...opts, groupBy: c.groupBy });
-      if (byCourse) cur = mergePartials(cur, part);
-      else acc = mergePartials(acc, part);
+      facts = mergeFacts(
+        facts,
+        dataFacts(
+          c.t,
+          selected.map((r) => r.person),
+        ),
+      );
+      const opts = aggOpts(c, null, scores, "enrolments");
+      acc = mergePartials(acc, aggregate(selected, { ...opts, groupBy: c.groupBy }));
       tot = mergePartials([tot], aggregate(selected, { ...opts, groupBy: [] }))[0] ?? tot;
       pages++;
       if (page.done) {
         finished = true;
         done.add(course.id);
-        if (byCourse) pageRows.push(...cur);
         cid = null;
         off = 0;
-        cur = [];
       } else {
         off += c.t.limits.participantsPageSize;
       }
@@ -418,32 +451,25 @@ async function runPages(c: RunCtx, prev: PagesState | undefined, doneIds: number
     if (!finished) break;
   }
 
-  notes(c, seen, observed);
-  const complete = done.size === c.courses.length;
-  if (complete) {
-    const rows = sortRows(byCourse ? pageRows : acc);
-    return {
-      ...finalAnswer(c, rows, tot, pop),
-      progress: { courses_done: done.size, courses_total: c.courses.length },
-    };
-  }
+  notes(c, seen, observed, facts);
+  const progress = {
+    courses_done: done.size,
+    courses_total: c.courses.length,
+    ...(cid !== null ? { course_in_progress: cid } : {}),
+  };
+  if (done.size === c.courses.length) return { ...finalAnswer(c, acc, tot, pop), progress };
   c.warnings.push(
     `Partial answer: ${done.size} of ${c.courses.length} ${c.t.vocabulary.coursePlural.toLowerCase()} done` +
       (cid !== null ? ` (course ${cid} in progress)` : "") +
       ". Call query_metrics again with the same arguments and next_cursor.",
   );
-  const rows = sortRows(pageRows);
   return {
     unit: "enrolments" as const,
     complete: false,
-    progress: {
-      courses_done: done.size,
-      courses_total: c.courses.length,
-      ...(cid !== null ? { course_in_progress: cid } : {}),
-    },
+    progress,
     next_cursor: encodeCursor({ v: 1, q: c.qh, done: [...done], state: snapshot() }, c.deps.cursorSecret),
-    rows_total: rows.length,
-    rows: rows.slice(0, c.args.limit).map((r) => finalize(r, c.signals, c.window !== null)),
+    rows_total: 0,
+    rows: [],
   };
 }
 
@@ -462,7 +488,9 @@ function ensureFits(c: RunCtx, state: PagesState | PeopleState, done: number[] =
 
 /** `dims` = the row's grouping: c.groupBy for group rows, [] for totals. */
 function packRow(c: RunCtx, r: PartialRow, dims: GroupDim[] = c.groupBy): Packed {
-  const g = dims.map((d) => (d === "course" ? r.group.course!.id : r.group[d]!));
+  const g = dims.map((d) =>
+    d === "course" ? r.group.course!.id : d === "category" ? r.group.category!.id : r.group[d]!,
+  );
   const nums = NUMERIC_FIELDS.map((f) => r[f]);
   while (nums.length && nums[nums.length - 1] === 0) nums.pop();
   return [g, ...nums];
@@ -476,6 +504,8 @@ function unpackRow(c: RunCtx, p: Packed, dims: GroupDim[] = c.groupBy): PartialR
     if (d === "course") {
       const course = c.coursesById.get(Number(value));
       group.course = { id: Number(value), name: course?.fullName ?? String(value) };
+    } else if (d === "category") {
+      group.category = { id: Number(value), name: c.categoryNames?.get(Number(value)) ?? null };
     } else {
       group[d] = String(value);
     }
@@ -488,15 +518,21 @@ function unpackRow(c: RunCtx, p: Packed, dims: GroupDim[] = c.groupBy): PartialR
 const packRows = (c: RunCtx, rows: PartialRow[]) => rows.map((r) => packRow(c, r));
 const unpackRows = (c: RunCtx, rows: Packed[]) => rows.map((r) => unpackRow(c, r));
 
-function finalAnswer(c: RunCtx, rows: PartialRow[], tot: PartialRow, pop: StatusCounts, merged = 0) {
+function finalAnswer(c: RunCtx, rows: PartialRow[], tot: PartialRow, pop: PopulationCounts) {
+  const windowed = c.window !== null;
+  const sorted = sortMetricRows(
+    rows.map((r) => finalize(r, c.signals, windowed)),
+    c.args.sort,
+  );
   return {
     unit: c.unit,
     complete: true,
     next_cursor: null,
-    population: labelledCounts(pop, c.t, merged),
-    totals: finalize(tot, c.signals, c.window !== null, false),
-    rows_total: rows.length,
-    rows: rows.slice(0, c.args.limit).map((r) => finalize(r, c.signals, c.window !== null)),
+    population: populationOut(pop, c.t, c.validOnly),
+    totals: finalize(tot, c.signals, windowed, false),
+    sort: c.args.sort,
+    rows_total: sorted.length,
+    rows: sorted.slice(0, c.args.limit),
   };
 }
 
@@ -509,17 +545,29 @@ async function maybeScores(c: RunCtx, courses: Course[]) {
   );
 }
 
-function notes(c: RunCtx, selected: EnrolmentRecord[], observed: Set<string>): void {
+/** `facts` = data-warning facts gathered across parts; computed from `selected` when absent. */
+function notes(c: RunCtx, selected: EnrolmentRecord[], observed: Set<string>, facts?: DataFacts): void {
   if (
-    c.signals.includes("site_last_access") &&
+    (c.signals.includes("logged_in") || c.signals.includes("accessed")) &&
     selected.length >= 20 &&
     selected.every((r) => r.lastSiteAccess === null)
   ) {
     c.warnings.push(
-      "No site access dates came back at all: the LMS may be hiding last access from the service account.",
+      "No sign-in dates came back at all: the LMS may be hiding last access from the service account.",
     );
   }
-  const filterRegions = c.args.filters?.region;
-  if (!c.groupBy.includes("region") && !filterRegions?.length) return;
+  c.warnings.push(
+    ...factWarnings(
+      c.t,
+      facts ??
+        dataFacts(
+          c.t,
+          selected.map((r) => r.person),
+        ),
+    ),
+  );
+  const filterRegions = c.filters.include.region;
+  if (!c.groupBy.includes("region") && !filterRegions?.length && !c.filters.exclude.region?.length) return;
+  c.warnings.push(regionSourceNote(c.t));
   c.warnings.push(...familyNotes(c.t.dimensions.region.label, [...observed], filterRegions));
 }

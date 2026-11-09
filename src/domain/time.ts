@@ -78,56 +78,56 @@ export interface AccessWindow {
 
 export interface WindowInput {
   recent_days?: number | undefined;
-  since?: string | undefined;
-  until?: string | undefined;
+  from?: string | undefined;
+  to?: string | undefined;
 }
 
 /**
- * Resolve a time window.
+ * Resolve a date range (BES-465: days run midnight to midnight, in the tenant's timezone).
  *
- * The LMS API exposes only the LAST access time per person/course, so:
- *  - a window ending now ("recent_days", or "since" with no past "until") is EXACT:
- *    last access >= start  <=>  accessed at least once in the window;
- *  - a window ending in the past can only tell whether the LAST access fell inside it.
- *    People who accessed in the window AND again later are not counted. This is labelled
+ * The LMS API exposes only the LAST access/sign-in time per person/course, so:
+ *  - a range ending now ("recent_days", or "from" with no past "to") is EXACT:
+ *    last sign-in >= start  <=>  signed in at least once in the range;
+ *  - a range ending in the past can only tell whether the LAST sign-in fell inside it.
+ *    People who signed in during the range AND again later are not counted. This is labelled
  *    explicitly (semantics = last_access_in_range) so it is never presented as exact.
  */
 export function resolveWindow(input: WindowInput, timeZone: string, nowSec: number): AccessWindow | null {
-  const { recent_days, since, until } = input;
+  const { recent_days, from: since, to: until } = input;
   if (recent_days === undefined && since === undefined && until === undefined) return null;
   if (recent_days !== undefined && (since !== undefined || until !== undefined)) {
-    throw new AppError("invalid_input", "Use either recent_days or since/until, not both.");
+    throw new AppError("invalid_input", "Use either recent_days or from/to, not both.");
   }
   if (recent_days !== undefined) {
     return {
       from: nowSec - recent_days * DAY,
       to: null,
       semantics: "accessed_since",
-      description: `Accessed at least once in the last ${recent_days} day(s) (rolling, up to now).`,
+      description: `At least once in the last ${recent_days} day(s) (rolling, up to now).`,
     };
   }
-  if (since === undefined) throw new AppError("invalid_input", "`until` requires `since`.");
+  if (since === undefined) throw new AppError("invalid_input", "`to` requires `from`.");
   const from = startOfDay(since, timeZone);
-  if (from > nowSec) throw new AppError("invalid_input", "`since` is in the future.");
+  if (from > nowSec) throw new AppError("invalid_input", "`from` is in the future.");
   const today = dateInZone(nowSec, timeZone);
   if (until === undefined || until >= today) {
     return {
       from,
       to: null,
       semantics: "accessed_since",
-      description: `Accessed at least once from ${since} up to now (${timeZone}).`,
+      description: `At least once from ${since} up to now (${timeZone}).`,
     };
   }
-  if (until < since) throw new AppError("invalid_input", "`until` is before `since`.");
+  if (until < since) throw new AppError("invalid_input", "`to` is before `from`.");
   const to = startOfDay(until, timeZone) + DAY;
   return {
     from,
     to,
     semantics: "last_access_in_range",
     description:
-      `Last access fell between ${since} and ${until} inclusive (${timeZone}). ` +
-      "This is NOT 'everyone who accessed in that period': people who also accessed after " +
-      `${until} are excluded, because the LMS only records the most recent access.`,
+      `Last sign-in/access fell between ${since} and ${until} inclusive (${timeZone}). ` +
+      "This is NOT 'everyone active in that period': people who were also active after " +
+      `${until} are excluded, because the LMS only records the most recent sign-in/access.`,
   };
 }
 

@@ -1,4 +1,5 @@
 import type {
+  AccountProfile,
   Category,
   Course,
   Enrolment,
@@ -14,10 +15,10 @@ import type {
  * No real names or records. Refused on Vercel by the startup guardrails.
  *
  * Mirrors what was sampled on GLA staging (patterns only): canonical Conso IDs
- * (branch code + 8 digits), PC alphanumeric IDs, 11-digit IDs with a dropped leading zero
- * (duplicate accounts), legacy formats, staff at "PC Center of Excellence", dummy IDs, the
- * UAT test series, non-learner roles, region "families" (Visayas vs Visayas 1/2), web course
- * access that the app never updates, and site access that it does.
+ * (branch code + 8 digits), PC alphanumeric IDs, an 11-digit ID with a dropped leading zero
+ * (a second account of the same dealer), legacy formats, staff at "PC Center of Excellence",
+ * dummy IDs, the UAT test series, non-learner roles, region "families" (Visayas vs Visayas 1/2),
+ * web course access that the app never updates, and site access that it does.
  */
 
 const DAY = 86_400;
@@ -65,23 +66,30 @@ export interface FixturePerson {
   firstName: string;
   lastName: string;
   profile: Record<string, string>;
+  emailDomain: string | null;
+  suspended: boolean;
   role: string;
   lastSiteAccess: number | null;
 }
 
 /** Edge-case accounts with fixed ids, used by tests. */
 export const EDGE = {
-  dealerAlnum: 9001, // valid alphanumeric Conso ID
-  dupDropped0: 9002, // 11-digit duplicate of dealer 1000 (same person)
-  legacyNone: 9003, // no Conso ID, non-Conso username
-  legacyFb: 9004, // "fb 007700901"
-  legacyNl: 9005, // "nl_0999_0007"
-  staff: 9006, // PC Center of Excellence, 4-digit id
-  dummyRepeat: 9007, // 123123123123
-  dummyOnes: 9008, // 111111111111
-  uat: 9009, // username in the staging UAT range
-  teacher: 9010, // editingteacher role
-  manager: 9011, // redemptionmanager role
+  dealerAlnum: 9001, // alphanumeric Conso ID — valid
+  dupDropped0: 9002, // 11-digit second account of dealer 1000 — valid, counts separately
+  legacyNone: 9003, // no Conso ID, non-Conso username — valid (no rule rejects it)
+  legacyFb: 9004, // "fb 007700901" — valid
+  legacyNl: 9005, // "nl_0999_0007" — valid
+  staff: 9006, // PC Center of Excellence, 4-digit id — valid, dropped by the default level exclude
+  dummyRepeat: 9007, // username "aimon.test" — hidden (test username)
+  dummyOnes: 9008, // username "admin.user" — hidden (admin username)
+  uat: 9009, // username 111111111125 (staging UAT range) — hidden (dummy Conso ID)
+  teacher: 9010, // editingteacher role — outside the base scope
+  manager: 9011, // student + redemptionmanager roles — outside the base scope
+  internalEmail: 9012, // @bihasa.ph email — hidden (internal email domain)
+  suspended: 9013, // suspended account — hidden
+  sampleName: 9014, // name "Sample Account" — hidden (test or dummy name)
+  blankName: 9015, // blank name — hidden (placeholder name)
+  legacyName: 9016, // name starting with a legacy username — hidden (placeholder name)
 } as const;
 
 export class FixtureLearningAdapter implements LearningDataPort {
@@ -127,6 +135,8 @@ export class FixtureLearningAdapter implements LearningDataPort {
           Region_Dropdown: i % 13 === 0 ? "" : pick(FIXTURE_REGIONS),
           branch_code: branch,
         },
+        emailDomain: "@example.com",
+        suspended: false,
         role: "student",
         lastSiteAccess: site(),
       });
@@ -137,6 +147,7 @@ export class FixtureLearningAdapter implements LearningDataPort {
       username: string,
       profile: Record<string, string>,
       role = "student",
+      over: Partial<FixturePerson> = {},
     ): void => {
       this.people.push({
         userId,
@@ -149,8 +160,11 @@ export class FixtureLearningAdapter implements LearningDataPort {
           branch_code: "CUBAO (0101)",
           ...profile,
         },
+        emailDomain: "@example.com",
+        suspended: false,
         role,
         lastSiteAccess: opts.nowSec - DAY,
+        ...over,
       });
     };
     edge(EDGE.dealerAlnum, "500000j99901", { dealer_conso_id: "500000j99901" });
@@ -167,6 +181,11 @@ export class FixtureLearningAdapter implements LearningDataPort {
     edge(EDGE.uat, "111111111125", { dealer_conso_id: "111111111125" });
     edge(EDGE.teacher, "teacher01", {}, "editingteacher");
     edge(EDGE.manager, "pcmanager001", { dealer_conso_id: "pcmanager01" }, "redemptionmanager");
+    edge(EDGE.internalEmail, "ops.staff", {}, "student", { emailDomain: "@bihasa.ph" });
+    edge(EDGE.suspended, "077700099990", { dealer_conso_id: "077700099990" }, "student", { suspended: true });
+    edge(EDGE.sampleName, "077700099991", {}, "student", { firstName: "Sample", lastName: "Account" });
+    edge(EDGE.blankName, "077700099992", {}, "student", { firstName: "", lastName: "" });
+    edge(EDGE.legacyName, "cl.user", {}, "student", { firstName: "cl_0106_00003", lastName: "Dealer" });
 
     for (const c of this.courses) {
       const m = new Map<number, number | null>();
@@ -207,7 +226,7 @@ export class FixtureLearningAdapter implements LearningDataPort {
         username: p.username,
         firstName: p.firstName,
         lastName: p.lastName,
-        courseRoles: [p.role],
+        courseRoles: p.role === "redemptionmanager" ? ["student", p.role] : [p.role],
         lastCourseAccess: m.get(p.userId) ?? null,
         lastSiteAccess: p.lastSiteAccess,
       }));
@@ -223,9 +242,13 @@ export class FixtureLearningAdapter implements LearningDataPort {
     return { rows, done: offset + limit >= all.length };
   }
 
-  async getProfiles(userIds: number[]): Promise<Map<number, Record<string, string>>> {
+  async getProfiles(userIds: number[]): Promise<Map<number, AccountProfile>> {
     const want = new Set(userIds);
-    return new Map(this.people.filter((p) => want.has(p.userId)).map((p) => [p.userId, p.profile]));
+    return new Map(
+      this.people
+        .filter((p) => want.has(p.userId))
+        .map((p) => [p.userId, { fields: p.profile, emailDomain: p.emailDomain, suspended: p.suspended }]),
+    );
   }
 
   async findPersonByUsername(username: string): Promise<PersonRecord | null> {
@@ -236,8 +259,9 @@ export class FixtureLearningAdapter implements LearningDataPort {
           username: p.username,
           firstName: p.firstName,
           lastName: p.lastName,
-          profile: p.profile,
-          suspended: false,
+          fields: p.profile,
+          emailDomain: p.emailDomain,
+          suspended: p.suspended,
           lastSiteAccess: p.lastSiteAccess,
         }
       : null;

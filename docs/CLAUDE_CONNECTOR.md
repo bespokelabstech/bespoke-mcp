@@ -36,7 +36,7 @@ Repeat for production with `https://gla.mcp.bespokelabs.tech/api/mcp` and the pr
 
 ## Demo prompts
 
-1. "For Revitalife Maqui Berry, how many Dealers have started it, by Region? Which Regions look alike and are separate values?"
-2. "List the Great Life Builders in Visayas 3 who have not started Revitalife Maqui Berry."
-3. "Per Course, how many Dealers used the app in the last 30 days, and what's the average quiz score?" (answered in parts)
-4. "How many enrolled accounts are Legacy or Excluded in Kwentong Great Life, and why?"
+1. "For Revitalife Maqui Berry, how many Dealers accessed it, by Region? Which Regions look alike and are separate values?"
+2. "List the Great Life Builders in Visayas 3 who have not accessed Revitalife Maqui Berry, latest sign-in first."
+3. "Per Course, how many Dealers logged in during the last 30 days, sorted by logged-in share?" (answered in parts)
+4. "How many accounts in Kwentong Great Life are not valid dealers, and why? How many accounts in total?"
