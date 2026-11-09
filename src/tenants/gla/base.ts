@@ -86,14 +86,14 @@ export const glaBase: TenantConfigInput = {
           label: "Dummy Conso ID",
         },
         // 5. Placeholder name: blank, "PC SFLMS Live", or starting with a legacy username
-        //    such as cl_0106_00003.
-        { field: "name", op: "equals", value: "", label: "Placeholder name" },
-        { field: "name", op: "matches", value: "pc sflms live", label: "Placeholder name" },
+        //    such as cl_0106_00003. One label per part, so population counts show which part fires.
+        { field: "name", op: "equals", value: "", label: "Placeholder name: blank" },
+        { field: "name", op: "matches", value: "pc sflms live", label: "Placeholder name: PC SFLMS Live" },
         {
           field: "name",
           op: "matches",
           value: "^[a-z]+\\d*_[0-9a-z]{3,5}_\\d+",
-          label: "Placeholder name",
+          label: "Placeholder name: legacy username",
         },
         // 6. Suspended account.
         { field: "status", op: "equals", value: "suspended", label: "Suspended account" },

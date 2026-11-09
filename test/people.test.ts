@@ -89,12 +89,16 @@ describe("valid_dealers saved filter (BES-465 rules, provisional)", () => {
   });
 
   it("5. placeholder names: blank, PC SFLMS Live, or starting with a legacy username", () => {
-    expect(hiddenBy({ userId: 1, firstName: "", lastName: " " })).toEqual(["Placeholder name"]);
-    expect(hiddenBy({ userId: 1, firstName: "PC SFLMS Live", lastName: "3" })).toEqual(["Placeholder name"]);
-    expect(hiddenBy({ userId: 1, firstName: "cl_0106_00003", lastName: "Reyes" })).toEqual([
-      "Placeholder name",
+    expect(hiddenBy({ userId: 1, firstName: "", lastName: " " })).toEqual(["Placeholder name: blank"]);
+    expect(hiddenBy({ userId: 1, firstName: "PC SFLMS Live", lastName: "3" })).toEqual([
+      "Placeholder name: PC SFLMS Live",
     ]);
-    expect(hiddenBy({ userId: 1, firstName: "sl2_0575c_00012", lastName: "" })).toEqual(["Placeholder name"]);
+    expect(hiddenBy({ userId: 1, firstName: "cl_0106_00003", lastName: "Reyes" })).toEqual([
+      "Placeholder name: legacy username",
+    ]);
+    expect(hiddenBy({ userId: 1, firstName: "sl2_0575c_00012", lastName: "" })).toEqual([
+      "Placeholder name: legacy username",
+    ]);
     expect(hiddenBy({ userId: 1, firstName: "Maria", lastName: "cl_0106_00003" })).toEqual([]);
   });
 

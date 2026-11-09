@@ -53,15 +53,15 @@ rejected at config load.
 
 The patterns are Bespoke's reading of BES-465's rule table (pending Jona's confirmation):
 
-| #   | BES-465 rule                                                                             | Pattern                                                                                | Label                            |
-| --- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------- |
-| 1   | Email domain bihasa.ph, bespokelabs.tech or training.net                                 | email `matches @(bihasa\.ph\|bespokelabs\.tech\|training\.net)$`                       | Internal email domain            |
-| 2   | Username starts `gla.train` / `glass.train`, or contains "test" or "admin"               | username `matches ^(gla\|glass)\.train\|test\|admin`                                   | Test, training or admin username |
-| 3   | Name has the whole word DUMMY, TEST, SAMPLE, DEMO, STUDENT or TRY, or is "Admin User"    | name `matches \b(dummy\|test\|sample\|demo\|student\|try)\b`; name `equals admin user` | Test or dummy name               |
-| 4   | Dummy Conso ID: 9991 series, one digit repeated with a short suffix, or starts 123456789 | username `matches ^9991\|^(\d)\1{5,}\d{0,3}$\|^123456789`                              | Dummy Conso ID                   |
-| 5   | Placeholder name: blank, contains "PC SFLMS Live", or starts with a legacy username      | name `equals ""`; `matches pc sflms live`; `matches ^[a-z]+\d*_[0-9a-z]{3,5}_\d+`      | Placeholder name                 |
-| 6   | Suspended account                                                                        | status `equals suspended`                                                              | Suspended account                |
-| 7   | Dealer Level is PC Center of Excellence or blank                                         | level `in ["pc center of excellence", ""]`                                             | COE or blank Dealer Level        |
+| #   | BES-465 rule                                                                             | Pattern                                                                                | Label                                                                          |
+| --- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| 1   | Email domain bihasa.ph, bespokelabs.tech or training.net                                 | email `matches @(bihasa\.ph\|bespokelabs\.tech\|training\.net)$`                       | Internal email domain                                                          |
+| 2   | Username starts `gla.train` / `glass.train`, or contains "test" or "admin"               | username `matches ^(gla\|glass)\.train\|test\|admin`                                   | Test, training or admin username                                               |
+| 3   | Name has the whole word DUMMY, TEST, SAMPLE, DEMO, STUDENT or TRY, or is "Admin User"    | name `matches \b(dummy\|test\|sample\|demo\|student\|try)\b`; name `equals admin user` | Test or dummy name                                                             |
+| 4   | Dummy Conso ID: 9991 series, one digit repeated with a short suffix, or starts 123456789 | username `matches ^9991\|^(\d)\1{5,}\d{0,3}$\|^123456789`                              | Dummy Conso ID                                                                 |
+| 5   | Placeholder name: blank, contains "PC SFLMS Live", or starts with a legacy username      | name `equals ""`; `matches pc sflms live`; `matches ^[a-z]+\d*_[0-9a-z]{3,5}_\d+`      | Placeholder name: blank / PC SFLMS Live / legacy username (one label per part) |
+| 6   | Suspended account                                                                        | status `equals suspended`                                                              | Suspended account                                                              |
+| 7   | Dealer Level is PC Center of Excellence or blank                                         | level `in ["pc center of excellence", ""]`                                             | COE or blank Dealer Level                                                      |
 
 Guesses to confirm: rule 4 reads "one digit repeated" as 6+ times with up to 3 extra digits
 (catches `111111111125` and the staging UAT pool) and "9991 series" as starting with 9991;

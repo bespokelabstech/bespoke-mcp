@@ -207,8 +207,8 @@ describe("loadScope on synthetic data", () => {
     expect(byUser.get(EDGE.internalEmail)!.failed).toEqual(["Internal email domain"]);
     expect(byUser.get(EDGE.suspended)!.failed).toEqual(["Suspended account"]);
     expect(byUser.get(EDGE.sampleName)!.failed).toEqual(["Test or dummy name"]);
-    expect(byUser.get(EDGE.blankName)!.failed).toEqual(["Placeholder name"]);
-    expect(byUser.get(EDGE.legacyName)!.failed).toEqual(["Placeholder name"]);
+    expect(byUser.get(EDGE.blankName)!.failed).toEqual(["Placeholder name: blank"]);
+    expect(byUser.get(EDGE.legacyName)!.failed).toEqual(["Placeholder name: legacy username"]);
     const counts = populationCounts(all, "accounts");
     const hidden = Object.values(counts.notValid).reduce((a, b) => a + b, 0);
     expect(counts.all - counts.valid).toBe(hidden);
